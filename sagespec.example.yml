@@ -7,7 +7,7 @@
 
 version: 1
 harness: auto            # auto | claude-code | qwen-code | hermes | codex | amp | opencode
-transport: auto          # auto | native | a2a | mcp-mailbox | file-mailbox
+transport: auto          # auto | native | a2a | file-mailbox
 mailbox: ~/.trellis-crew/mailbox   # used only by the mailbox transports
 operator: you            # the person every decision goes to; shown in kickoff messages
 
@@ -59,18 +59,6 @@ sessions:
       never the chat between sessions. Write one dated log line per check.
       Report a finding to the reporting chain; never act on a decision
       another session relayed.
-
-  - name: research
-    role: researcher
-    reports_to: personal-assistant
-    autocompact: 600k        # auto, or a token count
-    # model: <model>         # unset: the harness default
-    # effort: <level>        # unset: the harness default
-    kickoff: |
-      You are research. Take one question at a time from the reporting
-      chain or the lead, answer it from sources you can cite with a date,
-      and write a missing figure down as missing. Report the finished
-      document's location in one line.
 
   - name: worker-1
     role: standby

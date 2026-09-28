@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fixture stub. Qwen Code documents no shell-level version flag.
+exit 0

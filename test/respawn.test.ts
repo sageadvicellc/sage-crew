@@ -1,0 +1,185 @@
+import { readFileSync, statSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { main } from '../src/cli.ts';
+import { START_UP_HEADING } from '../src/kickoff/compose.ts';
+import { readTeam, writeTeam, type TeamRecord } from '../src/store/team-json.ts';
+import { SMALL_TEAM } from './helpers/roles.ts';
+import { claudeInstalled, detachedAdapter, writeRoles, type Harnessed } from './helpers/team.ts';
+
+const CLAUDE_FLAGS = { autocompact: '--autocompact', model: '--model', effort: '--effort' } as const;
+const TEAM = SMALL_TEAM.replace('autocompact: 400k', 'autocompact: 400k\n    model: model-a');
+
+async function started(flags: Parameters<typeof detachedAdapter>[1] = CLAUDE_FLAGS): Promise<Harnessed & { file: string }> {
+  const t = claudeInstalled({ adapters: { 'claude-code': detachedAdapter('claude-code', flags) } });
+  const file = writeRoles(t.env, 'team.yml', TEAM);
+  expect(await main(['start', '--roles', file], t.deps)).toBe(0);
+  t.runner.calls.length = 0;
+  t.out.lines.length = 0;
+  t.err.lines.length = 0;
+  return { ...t, file };
+}
+
+function entry(t: Harnessed, name: string) {
+  const team = readTeam(t.env);
+  if (!team.ok || !team.record) throw new Error('no team');
+  const found = team.record.sessions.find((s) => s.name === name);
+  if (!found) throw new Error(`no entry ${name}`);
+  return found;
+}
+
+describe('respawn', () => {
+  it('52: restarts one session under the same name with the given flags, and keeps roles-file values for the rest', async () => {
+    const t = await started();
+    const old = entry(t, 'helper-a');
+    expect(await main(['respawn', 'helper-a', '--effort', 'high'], t.deps)).toBe(0);
+    const kills = t.runner.calls.filter((c) => c.kind === 'kill');
+    expect(kills.map((c) => Number(c.command))).toEqual([old.pid]);
+    const launches = t.runner.calls.filter((c) => c.kind === 'detached');
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.args.slice(0, 6)).toEqual(['--autocompact', '400k', '--model', 'model-a', '--effort', 'high']);
+
+    t.runner.calls.length = 0;
+    expect(await main(['respawn', 'helper-a', '--model', 'model-b', '--autocompact', '500k'], t.deps)).toBe(0);
+    const again = t.runner.calls.find((c) => c.kind === 'detached');
+    expect(again?.args.slice(0, 4)).toEqual(['--autocompact', '500k', '--model', 'model-b']);
+    expect(again?.args).not.toContain('--effort');
+  });
+
+  it('53: sends the kickoff again and updates the pid and session id in team.json', async () => {
+    const t = await started();
+    const old = entry(t, 'helper-a');
+    const others = readTeam(t.env);
+    expect(await main(['respawn', 'helper-a'], t.deps)).toBe(0);
+    const launch = t.runner.calls.find((c) => c.kind === 'detached');
+    expect(launch?.args.at(-1)).toMatch(/^You help\.\n\n## trellis-crew start-up\nYou are helper-a, a worker\./);
+    expect(launch?.args.at(-1)).toContain(START_UP_HEADING);
+    const now = entry(t, 'helper-a');
+    expect(now.pid).not.toBe(old.pid);
+    expect(now.session_id).toBe(`fixture-helper-a-${now.pid}`);
+    const after = readTeam(t.env);
+    if (!others.ok || !others.record || !after.ok || !after.record) throw new Error('no team');
+    expect(after.record.sessions.filter((s) => s.name !== 'helper-a')).toEqual(
+      others.record.sessions.filter((s) => s.name !== 'helper-a'),
+    );
+    expect(after.record.sessions.map((s) => s.name)).toEqual(others.record.sessions.map((s) => s.name));
+  });
+
+  it('54: the roles file does not change', async () => {
+    const t = await started();
+    const before = readFileSync(t.file, 'utf8');
+    const mtime = statSync(t.file).mtimeMs;
+    expect(await main(['respawn', 'helper-a', '--model', 'model-z'], t.deps)).toBe(0);
+    expect(readFileSync(t.file, 'utf8')).toBe(before);
+    expect(statSync(t.file).mtimeMs).toBe(mtime);
+  });
+
+  it('55: an invalid flag value or an unknown name fails before anything stops', async () => {
+    const t = await started();
+    const cases: string[][] = [
+      ['respawn', 'nobody'],
+      ['respawn', 'helper-a', '--autocompact', 'lots'],
+      ['respawn', 'helper-a', '--autocompact', '99k'],
+      ['respawn', 'helper-a', '--effort', 'extreme'],
+      ['respawn', 'helper-a', '--model', ''],
+      ['respawn', 'helper-a', '--model=--dangerously-skip-permissions'],
+      ['respawn', 'helper-a', '--model', 'model a'],
+      ['respawn', 'helper-a', '--effort=-x'],
+    ];
+    for (const argv of cases) {
+      expect(await main(argv, t.deps), argv.join(' ')).toBe(2);
+    }
+    expect(t.runner.calls).toEqual([]);
+    expect(t.err.text()).toMatch(/nobody/);
+  });
+
+  it('never signals a recorded pid that now belongs to another process', async () => {
+    const t = await started();
+    const old = entry(t, 'helper-a').pid as number;
+    t.runner.starts.set(old, 'fixture-start-someone-else');
+    expect(await main(['respawn', 'helper-a'], t.deps)).toBe(0);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill')).toEqual([]);
+    expect(t.out.text()).toMatch(/now belongs to another process/);
+  });
+
+  it('starts nothing when the old process cannot be checked', async () => {
+    const t = await started();
+    const old = entry(t, 'helper-a').pid as number;
+    t.runner.unknown.set(old, 'ps did not finish in time');
+    expect(await main(['respawn', 'helper-a'], t.deps)).toBe(1);
+    expect(t.runner.calls).toEqual([]);
+    expect(t.err.text()).toMatch(/cannot tell whether pid .* \(ps did not finish in time\)/);
+    expect(entry(t, 'helper-a').pid).toBe(old);
+  });
+
+  it('56: a flag the harness cannot take prints the same warning as start', async () => {
+    const t = claudeInstalled({ adapters: { 'claude-code': detachedAdapter('claude-code', {}) } });
+    const file = writeRoles(t.env, 'team.yml', TEAM);
+    expect(await main(['start', '--roles', file], t.deps)).toBe(0);
+    const atStart = t.err.lines.find((l) => l.startsWith('warning: helper-a: model'));
+    expect(atStart).toBe('warning: helper-a: model ignored. Fixture Harness has no verified flag for it.');
+    t.err.lines.length = 0;
+    expect(await main(['respawn', 'helper-a', '--model', 'model-b'], t.deps)).toBe(0);
+    expect(t.err.lines).toContain(atStart);
+  });
+
+  it('refuses on a session with no local process, and changes nothing', async () => {
+    const t = claudeInstalled();
+    expect(await main(['start'], t.deps)).toBe(0);
+    t.runner.calls.length = 0;
+    expect(await main(['respawn', 'worker-1', '--model', 'model-b'], t.deps)).toBe(1);
+    expect(t.runner.calls).toEqual([]);
+    expect(t.err.text()).toMatch(/cannot stop worker-1/);
+  });
+
+  it('fails when no team is running', async () => {
+    const t = claudeInstalled();
+    expect(await main(['respawn', 'worker-1'], t.deps)).toBe(1);
+    expect(t.runner.calls).toEqual([]);
+  });
+});
+
+describe('a team record from a build that had the researcher', () => {
+  // An older build wrote merge_reporters in the source, and a research
+  // session in the team. This build must read that record and ignore both.
+  function olderRecord(): Harnessed {
+    const t = claudeInstalled({ adapters: { 'claude-code': detachedAdapter('claude-code', CLAUDE_FLAGS) } });
+    const older = {
+      version: 1,
+      harness: 'claude-code',
+      transport: 'native',
+      roles: { file: null, merge_reporters: true },
+      sessions: [
+        { name: 'benchmark', pid: 4100, session_id: null, started: 'start-benchmark' },
+        { name: 'research', pid: 4101, session_id: null, started: 'start-research' },
+      ],
+    };
+    writeTeam(t.env, older as unknown as TeamRecord);
+    for (const pid of [4100, 4101]) t.runner.living.add(pid);
+    t.runner.starts.set(4100, 'start-benchmark');
+    t.runner.starts.set(4101, 'start-research');
+    return t;
+  }
+
+  it('reads it, and merge_reporters changes nothing: benchmark respawns as the auditor alone', async () => {
+    const t = olderRecord();
+    const team = readTeam(t.env);
+    expect(team.ok).toBe(true);
+    if (!team.ok || !team.record) throw new Error('no team');
+    expect(team.record.sessions.map((s) => s.name)).toEqual(['benchmark', 'research']);
+
+    expect(await main(['respawn', 'benchmark'], t.deps)).toBe(0);
+    const launch = t.runner.calls.find((c) => c.kind === 'detached');
+    const kickoff = launch?.args[launch.args.length - 1] ?? '';
+    expect(kickoff).toMatch(/^You are the auditor\./);
+    expect(kickoff).not.toMatch(/You are research/);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill').map((c) => Number(c.command))).toEqual([4100]);
+  });
+
+  it('respawn research exits 2 with the "no longer holds" message, and stops and starts nothing', async () => {
+    const t = olderRecord();
+    expect(await main(['respawn', 'research'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(/The roles file no longer holds a session named "research"\. Nothing was stopped\./);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill' || c.kind === 'detached' || c.kind === 'run')).toEqual([]);
+    expect(t.runner.living.has(4101)).toBe(true);
+  });
+});
