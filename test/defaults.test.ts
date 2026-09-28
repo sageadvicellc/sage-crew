@@ -121,12 +121,47 @@ describe('default team', () => {
   it('19: with no --roles, the CLI reads ./sagespec.yml when it exists', async () => {
     const t = cliDeps();
     writeFileSync(join(t.env.cwd, 'sagespec.yml'), SMALL_TEAM);
-    expect(await main(['start'], t.deps)).toBe(0);
+    expect(await main(['start', '--yes'], t.deps)).toBe(0);
     expect(names(t.startTeam.mock.calls[0]?.[0] as RolesConfig)).toContain('boss');
 
     const bare = cliDeps();
     expect(await main(['start'], bare.deps)).toBe(0);
     expect(bare.startTeam.mock.calls[0]?.[0]).toEqual(defaultTeam());
+  });
+
+  it('a ./sagespec.yml found in the folder is shown and confirmed before anything starts', async () => {
+    // No terminal and no --yes: it prints the file and each kickoff, then refuses.
+    const quiet = cliDeps();
+    const out = capture();
+    const file = join(quiet.env.cwd, 'sagespec.yml');
+    writeFileSync(file, SMALL_TEAM);
+    expect(await main(['start'], { ...quiet.deps, out: out.write })).toBe(2);
+    expect(out.text()).toContain(`Roles file found in this folder: ${file}`);
+    expect(out.text()).toMatch(/boss:\n {2}You lead\./);
+    expect(quiet.err.text()).toMatch(/--yes/);
+    expect(quiet.startTeam).not.toHaveBeenCalled();
+
+    // A terminal asks. Anything but yes starts nothing.
+    const env = makeTestEnv({ stdinIsTTY: true });
+    writeFileSync(join(env.cwd, 'sagespec.yml'), SMALL_TEAM);
+    const asked: string[] = [];
+    const startTeam = vi.fn(async (_config: RolesConfig) => 0);
+    const deps = { env, runner: recordingRunner(), out: () => {}, err: () => {}, startTeam };
+    const say = (answer: string) => async (question: string) => {
+      asked.push(question);
+      return answer;
+    };
+    expect(await main(['start'], { ...deps, ask: say('') })).toBe(1);
+    expect(startTeam).not.toHaveBeenCalled();
+    expect(await main(['start'], { ...deps, ask: say('y') })).toBe(0);
+    expect(startTeam).toHaveBeenCalledTimes(1);
+    expect(asked[0]).toMatch(/Start 5 sessions from this file\? \[y\/N\]/);
+
+    // An explicit --roles file is the operator's own choice and is not asked about.
+    const chosen = cliDeps();
+    const own = join(chosen.env.cwd, 'team.yml');
+    writeFileSync(own, SMALL_TEAM);
+    expect(await main(['start', '--roles', own], chosen.deps)).toBe(0);
   });
 
   it('51 groundwork: top-level --roles loads the same file as start --roles', async () => {

@@ -5,14 +5,19 @@ describe('args', () => {
   it('parses start with its flags', () => {
     expect(parseCommand(['start', '--workers', '5', '--roles', 'team.yml'])).toEqual({
       ok: true,
-      command: { name: 'start', workers: 5, roles: 'team.yml', mergeReporters: false },
+      command: { name: 'start', workers: 5, roles: 'team.yml', mergeReporters: false, yes: false },
     });
+  });
+
+  it('parses start --yes and -y', () => {
+    expect(parseCommand(['start', '--yes'])).toMatchObject({ ok: true, command: { name: 'start', yes: true } });
+    expect(parseCommand(['start', '-y'])).toMatchObject({ ok: true, command: { name: 'start', yes: true } });
   });
 
   it('treats a leading --roles as start', () => {
     expect(parseCommand(['--roles', 'team.yml'])).toEqual({
       ok: true,
-      command: { name: 'start', roles: 'team.yml', mergeReporters: false },
+      command: { name: 'start', roles: 'team.yml', mergeReporters: false, yes: false },
     });
   });
 

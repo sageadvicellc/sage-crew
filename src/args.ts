@@ -14,7 +14,7 @@ export type Command =
       transport?: TransportFlag;
     }
   | { name: 'update'; check: boolean }
-  | { name: 'start'; workers?: number; roles?: string; mergeReporters: boolean }
+  | { name: 'start'; workers?: number; roles?: string; mergeReporters: boolean; yes: boolean }
   | { name: 'status' }
   | { name: 'stop' }
   | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string };
@@ -24,7 +24,7 @@ export type ParseResult = { ok: true; command: Command } | { ok: false; message:
 export const USAGE = `Usage:
   trellis-crew install [--harness <name>] [--non-interactive] [--reconfigure] [--transport <name>]
   trellis-crew update [--check]
-  trellis-crew start [--workers N] [--roles sagespec.yml] [--merge-reporters]
+  trellis-crew start [--workers N] [--roles sagespec.yml] [--merge-reporters] [--yes]
   trellis-crew status
   trellis-crew stop
   trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N]
@@ -63,12 +63,13 @@ function parseStart(args: string[]): ParseResult {
       workers: { type: 'string' },
       roles: { type: 'string' },
       'merge-reporters': { type: 'boolean', default: false },
+      yes: { type: 'boolean', short: 'y', default: false },
     },
     false,
   );
   const workers = parseWorkers(typeof values.workers === 'string' ? values.workers : undefined);
   if (workers instanceof Error) return { ok: false, message: workers.message };
-  const command: Command = { name: 'start', mergeReporters: values['merge-reporters'] === true };
+  const command: Command = { name: 'start', mergeReporters: values['merge-reporters'] === true, yes: values.yes === true };
   if (workers !== undefined) command.workers = workers;
   if (typeof values.roles === 'string') command.roles = values.roles;
   return { ok: true, command };

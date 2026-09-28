@@ -3,6 +3,7 @@ import { buildLaunchFlags, launchValues } from '../adapters/flags.ts';
 import { adapterFor } from '../adapters/index.ts';
 import type { Adapter, AdapterContext, LaunchItem, LaunchValues } from '../adapters/types.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from '../deps.ts';
+import { terminalAsk } from '../detect/confirm.ts';
 import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { composeKickoff } from '../kickoff/compose.ts';
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
@@ -22,6 +23,30 @@ export function loadForHarness(options: Omit<LoadOptions, 'harness'>, deps: CliD
   const first = loadTeam({ ...options, ...(hint ? { harness: hint } : {}) });
   if (!first.ok || first.config.harness === 'auto' || first.config.harness === hint) return first;
   return loadTeam({ ...options, harness: first.config.harness });
+}
+
+/**
+ * Shows a roles file that `start` found in the current folder, with each
+ * session's kickoff, and asks before it starts anything. A cloned folder
+ * can hold a roles file with another author's prompts, so it never loads
+ * silently. `--yes` skips the question. With no terminal and no `--yes`,
+ * it refuses. Returns an exit code to stop with, or undefined to go on.
+ */
+export async function confirmFoundRoles(file: string, config: RolesConfig, yes: boolean, deps: CliDeps): Promise<number | undefined> {
+  deps.out(`Roles file found in this folder: ${file}`);
+  for (const session of config.sessions) {
+    deps.out(`${session.name}:`);
+    for (const line of session.kickoff.trimEnd().split('\n')) deps.out(`  ${line}`);
+  }
+  if (yes) return undefined;
+  if (!deps.env.stdinIsTTY) {
+    deps.err('No terminal can confirm this roles file. Read it, then run again with --yes, or pass --roles <file>.');
+    return EXIT_USAGE;
+  }
+  const answer = (await (deps.ask ?? terminalAsk())(`Start ${config.sessions.length} sessions from this file? [y/N] `)).trim().toLowerCase();
+  if (answer === 'y' || answer === 'yes') return undefined;
+  deps.err('Nothing was started.');
+  return EXIT_RUNTIME;
 }
 
 export interface LaunchPlan {

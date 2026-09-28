@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseCommand, USAGE } from './args.ts';
 import { runInstall } from './commands/install.ts';
 import { runRespawn } from './commands/respawn.ts';
-import { launchTeam, loadForHarness } from './commands/start.ts';
+import { confirmFoundRoles, launchTeam, loadForHarness } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runStop } from './commands/stop.ts';
 import { runUpdate } from './commands/update.ts';
@@ -44,6 +44,10 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
       if (!loaded.ok) {
         for (const line of loaded.lines) deps.err(line);
         return EXIT_USAGE;
+      }
+      if (command.roles === undefined && loaded.file !== null) {
+        const stop = await confirmFoundRoles(loaded.file, loaded.config, command.yes, deps);
+        if (stop !== undefined) return stop;
       }
       const source = {
         file: loaded.file,

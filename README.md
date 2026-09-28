@@ -56,7 +56,12 @@ dated backup beside it, and it prints both paths.
 1. Write your roles file. Copy `sagespec.example.yml` to `sagespec.yml`
    and change it. With no roles file, the CLI starts the default team.
 2. Run `trellis-crew start`. It reads `./sagespec.yml`. Pass
-   `--roles <file>` to read another file.
+   `--roles <file>` to read another file. When `start` finds
+   `./sagespec.yml` on its own, it prints the file's path and each
+   kickoff message, and it asks before it starts anything. A cloned
+   folder can hold another author's prompts. Add `--yes` to skip the
+   question in a script. With no terminal and no `--yes`, it starts
+   nothing.
 3. Run `trellis-crew status` to list each session and its state.
 4. Run `trellis-crew stop` to end the team. It ends only the processes
    the CLI started, and then it removes the team record.
