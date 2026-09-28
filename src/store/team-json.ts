@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir, type Env } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
-import { isHarnessId, type HarnessId } from '../roles/schema.ts';
+import { isHarnessId, TRANSPORTS, type HarnessId, type Transport } from '../roles/schema.ts';
 import type { ReadResult } from './install-yml.ts';
 
 /** One session the CLI started. */
@@ -14,10 +14,22 @@ export interface TeamEntry {
   session_id: string | null;
 }
 
+/** Where the team's layout came from, so respawn can read it again. */
+export interface TeamSource {
+  /** The roles file's absolute path, or null for the default team. */
+  file: string | null;
+  workers?: number;
+  merge_reporters?: boolean;
+}
+
 /** The team the CLI started, read by status, stop, and respawn. */
 export interface TeamRecord {
   version: 1;
   harness: HarnessId;
+  transport?: Transport;
+  roles?: TeamSource;
+  /** The file mailbox folder, for the file-mailbox transport. */
+  mailbox?: string;
   /** The detached supervisor's process id, on harnesses that need one. */
   supervisor_pid?: number;
   sessions: TeamEntry[];
@@ -29,6 +41,16 @@ export function teamJsonPath(env: Env): string {
 
 function isPid(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function isSource(value: unknown): value is TeamSource {
+  if (typeof value !== 'object' || value === null) return false;
+  const source = value as Record<string, unknown>;
+  return (
+    (source.file === null || typeof source.file === 'string') &&
+    (source.workers === undefined || isPid(source.workers)) &&
+    (source.merge_reporters === undefined || typeof source.merge_reporters === 'boolean')
+  );
 }
 
 function isEntry(value: unknown): value is TeamEntry {
@@ -61,7 +83,10 @@ export function readTeam(env: Env): ReadResult<TeamRecord> {
     !isHarnessId(record.harness) ||
     !Array.isArray(record.sessions) ||
     !record.sessions.every(isEntry) ||
-    (record.supervisor_pid !== undefined && !isPid(record.supervisor_pid))
+    (record.supervisor_pid !== undefined && !isPid(record.supervisor_pid)) ||
+    (record.transport !== undefined && (record.transport === ('auto' as string) || !(TRANSPORTS as readonly string[]).includes(record.transport))) ||
+    (record.roles !== undefined && !isSource(record.roles)) ||
+    (record.mailbox !== undefined && typeof record.mailbox !== 'string')
   ) {
     return { ok: false, message: `${path}: the team record is damaged` };
   }
@@ -70,6 +95,9 @@ export function readTeam(env: Env): ReadResult<TeamRecord> {
     harness: record.harness,
     sessions: record.sessions.map((s) => ({ name: s.name, pid: s.pid, session_id: s.session_id })),
   };
+  if (record.transport !== undefined) out.transport = record.transport;
+  if (record.roles !== undefined) out.roles = record.roles;
+  if (record.mailbox !== undefined) out.mailbox = record.mailbox;
   if (record.supervisor_pid !== undefined) out.supervisor_pid = record.supervisor_pid;
   return { ok: true, record: out };
 }

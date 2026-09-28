@@ -28,6 +28,8 @@ export interface Runner {
   spawnDetached(command: string, args: readonly string[], options?: RunOptions): Promise<{ pid: number }>;
   /** Sends a signal to a process. Returns false when the process is gone. */
   kill(pid: number, signal?: NodeJS.Signals): boolean;
+  /** True when a process with this id exists. */
+  alive(pid: number): boolean;
 }
 
 function childEnv(env: RunOptions['env']): NodeJS.ProcessEnv | undefined {
@@ -129,6 +131,15 @@ export function createRunner(): Runner {
         return process.kill(pid, signal);
       } catch {
         return false;
+      }
+    },
+
+    alive(pid) {
+      try {
+        return process.kill(pid, 0);
+      } catch (error) {
+        // EPERM: the process exists but belongs to another user.
+        return error instanceof Error && 'code' in error && error.code === 'EPERM';
       }
     },
   };

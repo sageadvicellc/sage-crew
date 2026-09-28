@@ -21,7 +21,7 @@ export interface LoadOptions {
 }
 
 export type LoadResult =
-  | { ok: true; config: RolesConfig; source: string }
+  | { ok: true; config: RolesConfig; source: string; file: string | null }
   | { ok: false; code: 2; lines: string[] };
 
 function failure(...lines: string[]): LoadResult {
@@ -46,6 +46,7 @@ export function loadTeam(options: LoadOptions): LoadResult {
         mergeReporters: options.mergeReporters === true,
       }),
       source: 'the default team',
+      file: null,
     };
   }
 
@@ -63,8 +64,8 @@ export function loadTeam(options: LoadOptions): LoadResult {
   if (!result.ok) {
     return failure(...formatRolesErrors(result.errors, text, file), 'Nothing was started.');
   }
-  if (options.workers === undefined) return { ok: true, config: result.config, source: file };
+  if (options.workers === undefined) return { ok: true, config: result.config, source: file, file };
   const applied = applyWorkers(result.config, options.workers);
   if (!applied.ok) return failure(`${file}: ${applied.message}`, 'Nothing was started.');
-  return { ok: true, config: applied.config, source: file };
+  return { ok: true, config: applied.config, source: file, file };
 }
