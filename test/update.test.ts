@@ -41,7 +41,16 @@ describe('update', () => {
   it('36: a registry error is reported, never guessed', async () => {
     const t = rig(async () => ({ status: 'error', message: 'fixture outage' }));
     await main(['update', '--check'], t.deps);
-    expect(t.out.text()).toMatch(/could not be read \(fixture outage\)/);
+    expect(t.err.text()).toMatch(/could not be read \(fixture outage\)/);
+    expect(t.out.text()).not.toMatch(/could not be read/);
+  });
+
+  it('a registry version that is not a version is an error, and is never printed', async () => {
+    const t = rig(async () => ({ status: 'ok', version: '9.9.9\u001b[2Jfixture' }));
+    await main(['update', '--check'], t.deps);
+    expect(t.err.text()).toMatch(/could not be read \(the registry returned a value that is not a version\)/);
+    expect(t.out.text() + t.err.text()).not.toContain('\u001b');
+    expect(t.out.text()).not.toMatch(/Update the CLI with/);
   });
 
   it('37: --check writes nothing', async () => {

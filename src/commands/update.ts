@@ -19,6 +19,9 @@ export const SELF_UPDATE: Readonly<Record<HarnessId, { command: string } | { gap
   opencode: { gap: 'the OpenCode update command is not documented yet.' },
 };
 
+/** A semantic version: major.minor.patch, with an optional pre-release and build part. */
+export const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
 export interface UpdateOptions {
   check: boolean;
 }
@@ -26,7 +29,12 @@ export interface UpdateOptions {
 /** Compares the CLI with the registry, updates the plugin, and prints the harness's own update command. */
 export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<number> {
   const current = cliVersion();
-  const latest = await (deps.fetchLatest ?? npmFetchLatest)(PACKAGE_NAME);
+  const fetched = await (deps.fetchLatest ?? npmFetchLatest)(PACKAGE_NAME);
+  // The registry's value is printed, so a value that is not a version is an error, never echoed.
+  const latest =
+    fetched.status === 'ok' && !SEMVER_PATTERN.test(fetched.version)
+      ? { status: 'error' as const, message: 'the registry returned a value that is not a version' }
+      : fetched;
   if (latest.status === 'ok') {
     deps.out(`trellis-crew CLI: installed ${current}, latest on npm ${latest.version}.`);
     if (compareVersions(latest.version, current) > 0) {
@@ -35,7 +43,7 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
   } else if (latest.status === 'not-published') {
     deps.out(`trellis-crew CLI: installed ${current}, latest on npm: not published.`);
   } else {
-    deps.out(`trellis-crew CLI: installed ${current}, latest on npm: could not be read (${latest.message}).`);
+    deps.err(`trellis-crew CLI: installed ${current}, latest on npm: could not be read (${latest.message}).`);
   }
 
   const stored = readInstallRecord(deps.env);
