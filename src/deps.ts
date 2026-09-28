@@ -1,5 +1,6 @@
 import type { Adapter } from './adapters/types.ts';
 import type { Env } from './env.ts';
+import type { FetchLatest } from './registry.ts';
 import type { HarnessId, RolesConfig } from './roles/schema.ts';
 import type { Runner } from './runner.ts';
 import type { TeamSource } from './store/team-json.ts';
@@ -21,4 +22,10 @@ export interface CliDeps {
   startTeam?: (config: RolesConfig, deps: CliDeps, source: TeamSource) => Promise<number>;
   /** Adapters that replace the built ones, for tests. */
   adapters?: Partial<Record<HarnessId, Adapter>>;
+  /** Asks the operator one question on the terminal. */
+  ask?: (question: string) => Promise<string>;
+  /** The clock. */
+  now?: () => Date;
+  /** Reads the latest published version. Tests always pass a stand-in. */
+  fetchLatest?: FetchLatest;
 }

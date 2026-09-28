@@ -20,10 +20,24 @@ describe('install.yml store', () => {
     });
   });
 
+  it('holds a null plugin version and the CLI version', () => {
+    const env = makeTestEnv();
+    writeInstallRecord(env, { harness: 'hermes', transport: 'file-mailbox', plugin_version: null, cli_version: '0.1.0' });
+    expect(readInstallRecord(env)).toEqual({
+      ok: true,
+      record: { harness: 'hermes', transport: 'file-mailbox', plugin_version: null, cli_version: '0.1.0' },
+    });
+  });
+
   it('reports a damaged file instead of guessing', () => {
     const env = makeTestEnv();
     mkdirSync(join(env.home, '.trellis-crew'));
-    for (const bad of ['harness: [', 'harness: pigeon\ntransport: native\nplugin_version: 1', '- a list']) {
+    for (const bad of [
+      'harness: [',
+      'harness: pigeon\ntransport: native\nplugin_version: "1"',
+      'harness: hermes\ntransport: native\nplugin_version: 1',
+      '- a list',
+    ]) {
       writeFileSync(installYmlPath(env), bad);
       expect(readInstallRecord(env).ok, bad).toBe(false);
     }

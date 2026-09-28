@@ -1,23 +1,19 @@
 #!/usr/bin/env node
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseCommand, USAGE } from './args.ts';
+import { runInstall } from './commands/install.ts';
 import { runRespawn } from './commands/respawn.ts';
 import { launchTeam, loadForHarness } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runStop } from './commands/stop.ts';
-import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from './deps.ts';
+import { runUpdate } from './commands/update.ts';
+import { EXIT_OK, EXIT_USAGE, type CliDeps } from './deps.ts';
 import { envFromProcess } from './env.ts';
 import { createRunner } from './runner.ts';
+import { cliVersion } from './versions.ts';
 
 export { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from './deps.ts';
-
-function packageVersion(): string {
-  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    version: string;
-  };
-  return pkg.version;
-}
 
 /** Runs one command line and returns the exit code. */
 export async function main(argv: readonly string[], deps: CliDeps): Promise<number> {
@@ -33,7 +29,7 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
       deps.out(USAGE);
       return EXIT_OK;
     case 'version':
-      deps.out(packageVersion());
+      deps.out(cliVersion());
       return EXIT_OK;
     case 'start': {
       const loaded = loadForHarness(
@@ -62,9 +58,10 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
       return runStop(deps);
     case 'respawn':
       return runRespawn(command, deps);
-    default:
-      deps.err(`trellis-crew ${command.name}: not built yet`);
-      return EXIT_RUNTIME;
+    case 'install':
+      return runInstall(command, deps);
+    case 'update':
+      return runUpdate(command, deps);
   }
 }
 

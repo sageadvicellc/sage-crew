@@ -18,6 +18,8 @@ export interface AdapterContext {
 
 export type LaunchOutcome = { ok: true; entry: TeamEntry } | { ok: false; message: string };
 
+export type PluginOutcome = { ok: true } | { ok: false; message: string };
+
 /** What each harness adapter provides. */
 export interface Adapter {
   id: HarnessId;
@@ -28,4 +30,8 @@ export interface Adapter {
   launch(name: string, kickoff: string, flagArgs: readonly string[], ctx: AdapterContext): Promise<LaunchOutcome>;
   /** The line stop prints for a recorded session that holds no local process. */
   noProcessNote(entry: TeamEntry): string;
+  /** Installs the plugin the way the harness documents. Unset: not built yet. */
+  installPlugin?(ctx: AdapterContext): Promise<PluginOutcome>;
+  /** Updates the plugin through the harness. Unset: not built yet. */
+  updatePlugin?(ctx: AdapterContext): Promise<PluginOutcome>;
 }
