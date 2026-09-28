@@ -20,8 +20,8 @@ export type Command =
   | { name: 'update'; check: boolean }
   | { name: 'start'; workers?: number; roles?: string; mergeReporters: boolean; yes: boolean }
   | { name: 'status' }
-  | { name: 'stop' }
-  | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string; yes?: boolean };
+  | { name: 'stop'; forceStop: boolean }
+  | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string; yes?: boolean; forceStop?: boolean };
 
 export type ParseResult = { ok: true; command: Command } | { ok: false; message: string };
 
@@ -30,8 +30,8 @@ export const USAGE = `Usage:
   trellis-crew update [--check]
   trellis-crew start [--workers N] [--roles sagespec.yml] [--merge-reporters] [--yes]
   trellis-crew status
-  trellis-crew stop
-  trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N] [--yes]
+  trellis-crew stop [--force-stop]
+  trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N] [--yes] [--force-stop]
   trellis-crew --roles sagespec.yml    (shorthand for start with a roles file)`;
 
 // No mcp-mailbox: this build carries the file mailbox only (plan decision 16).
@@ -122,21 +122,28 @@ function parseRespawn(args: string[]): ParseResult {
       effort: { type: 'string' },
       autocompact: { type: 'string' },
       yes: { type: 'boolean', short: 'y', default: false },
+      'force-stop': { type: 'boolean', default: false },
     },
     true,
   );
   if (positionals.length !== 1) return { ok: false, message: 'respawn takes exactly one session name' };
   const command: Extract<Command, { name: 'respawn' }> = { name: 'respawn', session: positionals[0] as string };
   if (values.yes === true) command.yes = true;
+  if (values['force-stop'] === true) command.forceStop = true;
   if (typeof values.model === 'string') command.model = values.model;
   if (typeof values.effort === 'string') command.effort = values.effort;
   if (typeof values.autocompact === 'string') command.autocompact = values.autocompact;
   return { ok: true, command };
 }
 
-function parseBare(name: 'status' | 'stop', args: string[]): ParseResult {
+function parseBare(name: 'status', args: string[]): ParseResult {
   parse(args, {}, false);
   return { ok: true, command: { name } };
+}
+
+function parseStop(args: string[]): ParseResult {
+  const { values } = parse(args, { 'force-stop': { type: 'boolean', default: false } }, false);
+  return { ok: true, command: { name: 'stop', forceStop: values['force-stop'] === true } };
 }
 
 /** Parses the command line. A usage error returns a message and never throws. */
@@ -158,8 +165,9 @@ export function parseCommand(argv: readonly string[]): ParseResult {
       case 'start':
         return parseStart(rest);
       case 'status':
-      case 'stop':
         return parseBare(first, rest);
+      case 'stop':
+        return parseStop(rest);
       case 'respawn':
         return parseRespawn(rest);
       default:

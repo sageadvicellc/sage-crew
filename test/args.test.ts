@@ -28,7 +28,9 @@ describe('args', () => {
     });
     expect(parseCommand(['update', '--check'])).toMatchObject({ ok: true, command: { name: 'update', check: true } });
     expect(parseCommand(['status'])).toMatchObject({ ok: true, command: { name: 'status' } });
-    expect(parseCommand(['stop'])).toMatchObject({ ok: true, command: { name: 'stop' } });
+    expect(parseCommand(['stop'])).toMatchObject({ ok: true, command: { name: 'stop', forceStop: false } });
+    expect(parseCommand(['stop', '--force-stop'])).toMatchObject({ ok: true, command: { name: 'stop', forceStop: true } });
+    expect(parseCommand(['respawn', 'main', '--force-stop'])).toMatchObject({ ok: true, command: { name: 'respawn', forceStop: true } });
     expect(parseCommand(['respawn', 'worker-1', '--model', 'm', '--effort', 'high', '--autocompact', '400k'])).toEqual({
       ok: true,
       command: { name: 'respawn', session: 'worker-1', model: 'm', effort: 'high', autocompact: '400k' },

@@ -20,6 +20,8 @@ export interface RespawnOptions {
   autocompact?: string;
   /** --yes: use a roles file that changed since start with no question. */
   yes?: boolean;
+  /** --force-stop: signal an old pid whose record holds no start time. */
+  forceStop?: boolean;
 }
 
 /** Checks the flag values against the harness's bounds. Returns the problems found. */
@@ -122,7 +124,7 @@ export async function runRespawn(options: RespawnOptions, deps: CliDeps): Promis
     return EXIT_RUNTIME;
   }
 
-  const stopped = stopPid(entry.name, entry.pid, entry.started, deps);
+  const stopped = await stopPid(entry.name, entry.pid, entry.started, deps, options.forceStop ? { forceStop: true } : {});
   printStop(stopped, deps);
   if (stopped.kept) {
     deps.err('Nothing was started, because the old process could not be checked.');

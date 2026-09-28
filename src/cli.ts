@@ -71,7 +71,7 @@ async function dispatch(command: Command, deps: CliDeps): Promise<number> {
     case 'status':
       return runStatus(deps);
     case 'stop':
-      return runStop(deps);
+      return runStop({ forceStop: command.forceStop }, deps);
     case 'respawn':
       return runRespawn(command, deps);
     case 'install':

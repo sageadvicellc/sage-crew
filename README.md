@@ -74,7 +74,12 @@ file first and asks, as `start` does. `--yes` skips the question.
    nothing.
 3. Run `trellis-crew status` to list each session and its state.
 4. Run `trellis-crew stop` to end the team. It ends only the processes
-   the CLI started, and then it removes the team record.
+   the CLI started, and then it removes the team record. The CLI checks
+   each process ID against the start time in the team record first. If
+   the record holds no start time, the CLI warns and asks. With no
+   terminal, it signals nothing and keeps the record. Add `--force-stop`
+   to signal that process with no question. `respawn` takes the same
+   flag.
 
 `trellis-crew start` also takes `--workers N`, which sets the number of
 workers, and `--merge-reporters`, which joins the default team's auditor
