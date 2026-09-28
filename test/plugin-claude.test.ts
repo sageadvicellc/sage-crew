@@ -52,7 +52,7 @@ describe('Claude Code plugin install and update', () => {
 
   it('32: Claude Code gets its documented install arguments, marketplace first', async () => {
     const t = rig();
-    expect(await main(['install', '--non-interactive'], t.deps)).toBe(0);
+    expect(await main(['install', '--non-interactive', '--yes'], t.deps)).toBe(0);
     expect(pluginCalls(t.runner)).toEqual([
       [claude, 'plugin', 'marketplace', 'add', CLAUDE_MARKETPLACE_REPO],
       [claude, 'plugin', 'install', CLAUDE_PLUGIN_ID],

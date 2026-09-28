@@ -6,7 +6,7 @@ import { findBinary, HARNESSES, probeHarnesses, type HarnessInfo } from '../dete
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam } from '../roles/load.ts';
 import type { Transport } from '../roles/schema.ts';
-import { setInboundAccept } from '../settings/inbound.ts';
+import { setInboundAccept, type InboundTarget } from '../settings/inbound.ts';
 import { readInstallRecord, writeInstallRecord } from '../store/install-yml.ts';
 import { resolveTransport } from '../transport.ts';
 import { bundledPluginVersion, cliVersion } from '../versions.ts';
@@ -17,6 +17,8 @@ export interface InstallOptions {
   harness?: string;
   nonInteractive: boolean;
   reconfigure: boolean;
+  yes?: boolean;
+  skipInbound?: boolean;
   transport?: TransportFlag;
 }
 
@@ -47,6 +49,38 @@ async function chooseHarness(options: InstallOptions, deps: CliDeps): Promise<{ 
     return { ok: false, code: result.code };
   }
   return { ok: true, harness: result.harness };
+}
+
+/**
+ * Explains the inbound setting and gets the operator's consent for it.
+ * `--skip-inbound` declines and `--yes` consents, with no question. A
+ * terminal asks, and the default answer is no. With no terminal and
+ * neither flag, consent is missing, so the setting is not changed.
+ */
+async function inboundConsent(
+  target: InboundTarget,
+  displayName: string,
+  options: InstallOptions,
+  deps: CliDeps,
+): Promise<'granted' | 'declined' | 'missing'> {
+  const key = target.keyPath.join('.');
+  if (options.skipInbound) {
+    deps.out(`Skipped the inbound setting. ${key} in ${target.settingsPath} is unchanged, so native messages may not reach the team.`);
+    return 'declined';
+  }
+  deps.out(`Install sets ${key} to accept in ${target.settingsPath}, after a dated backup.`);
+  deps.out(`This applies to every ${displayName} session for this user, not only the team.`);
+  deps.out('Any session on this machine can then queue messages to those sessions.');
+  deps.out('trellis-crew stop does not undo it. To undo it, restore the backup or edit the file.');
+  if (options.yes) return 'granted';
+  if (options.nonInteractive || !deps.env.stdinIsTTY) {
+    deps.err(`The inbound setting was not changed, because nothing confirmed it. Run install again with --yes to set it, or with --skip-inbound to leave it.`);
+    return 'missing';
+  }
+  const answer = (await (deps.ask ?? terminalAsk())(`Set ${key} to accept? [y/N] `)).trim().toLowerCase();
+  if (answer === 'y' || answer === 'yes') return 'granted';
+  deps.out(`Left ${key} unchanged, so native messages may not reach the team.`);
+  return 'declined';
 }
 
 /**
@@ -96,10 +130,15 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
       deps.err(`The ${harness.displayName} configuration folder ${folder} does not exist yet. Run ${harness.displayName} once, then run install again.`);
       return EXIT_RUNTIME;
     }
-    const inbound = setInboundAccept(target, { now: deps.now?.() ?? new Date(), out: deps.out });
-    if (!inbound.ok) {
-      deps.err(inbound.message);
-      return EXIT_RUNTIME;
+    const consent = await inboundConsent(target, harness.displayName, options, deps);
+    if (consent === 'granted') {
+      const inbound = setInboundAccept(target, { now: deps.now?.() ?? new Date(), out: deps.out });
+      if (!inbound.ok) {
+        deps.err(inbound.message);
+        return EXIT_RUNTIME;
+      }
+    } else if (consent === 'missing') {
+      complete = false;
     }
   }
 

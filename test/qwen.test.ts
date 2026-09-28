@@ -65,7 +65,7 @@ describe('Qwen Code', () => {
     mkdirSync(dir);
     const settings = join(dir, 'settings.json');
     writeFileSync(settings, '{"agents": {"crossSessionMessaging": true}, "theme": "x"}\n');
-    expect(await main(['install', '--harness', 'qwen-code'], t.deps)).toBe(1);
+    expect(await main(['install', '--harness', 'qwen-code', '--yes'], t.deps)).toBe(1);
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({
       agents: { crossSessionMessaging: true, crossSessionInbound: 'accept' },
       theme: 'x',

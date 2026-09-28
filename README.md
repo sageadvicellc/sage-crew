@@ -47,9 +47,14 @@ harness and writes your choice to `~/.trellis-crew/install.yml`.
 - `--non-interactive` asks no question. It takes the best candidate.
 - `--reconfigure` asks again, even when `install.yml` holds a choice.
 
-On Claude Code and Qwen Code, install also sets your user settings file
-to accept messages from other sessions. It first copies the file to a
-dated backup beside it, and it prints both paths.
+On Claude Code and Qwen Code, install can also set your user settings
+file to accept messages from other sessions. This applies to every
+session of that harness for your user, not only the team, and
+`trellis-crew stop` does not undo it. Install explains this and asks
+first. Add `--yes` to accept with no question, or `--skip-inbound` to
+leave the file alone. With no terminal and neither flag, install leaves
+the file alone and exits 1. Before it writes, install copies the file to
+a dated backup beside it, and it prints both paths.
 
 ### Run your team
 

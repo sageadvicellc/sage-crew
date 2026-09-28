@@ -40,7 +40,7 @@ function versionProbes(runner: RecordingRunner): string[] {
 describe('install', () => {
   it('33: install.yml holds the harness, the transport, and the plugin version', async () => {
     const t = rig();
-    await main(['install', '--non-interactive'], t.deps);
+    await main(['install', '--non-interactive', '--yes'], t.deps);
     const record = readInstallRecord(t.env);
     expect(record).toMatchObject({ ok: true, record: { harness: 'claude-code', transport: 'native', cli_version: cliVersion() } });
     expect(readFileSync(join(t.env.home, '.trellis-crew', 'install.yml'), 'utf8')).toMatch(/plugin_version:/);
@@ -71,14 +71,14 @@ describe('install', () => {
 
   it('34: a native install creates no mailbox folder', async () => {
     const t = rig();
-    await main(['install', '--non-interactive'], t.deps);
+    await main(['install', '--non-interactive', '--yes'], t.deps);
     expect(existsSync(join(t.env.home, '.trellis-crew', 'mailbox'))).toBe(false);
   });
 
   it('35: without --reconfigure the stored choice is reused and no probe runs', async () => {
     const t = rig();
     writeInstallRecord(t.env, { harness: 'hermes', transport: 'file-mailbox', plugin_version: null });
-    await main(['install', '--non-interactive'], t.deps);
+    await main(['install', '--non-interactive', '--yes'], t.deps);
     expect(versionProbes(t.runner)).toEqual([]);
     expect(t.out.text()).toMatch(/Using Hermes Agent, stored in install\.yml/);
     expect(readInstallRecord(t.env)).toMatchObject({ ok: true, record: { harness: 'hermes' } });
@@ -110,17 +110,69 @@ describe('install', () => {
     const settings = join(t.env.home, '.claude', 'settings.json');
     const { writeFileSync } = await import('node:fs');
     writeFileSync(settings, '{"theme": "dark"}\n');
-    await main(['install', '--non-interactive'], t.deps);
+    await main(['install', '--non-interactive', '--yes'], t.deps);
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({ theme: 'dark', crossSessionInbound: 'accept' });
     expect(existsSync(`${settings}.2026-03-04.bak`)).toBe(true);
     expect(t.out.text()).toContain(`${settings}.2026-03-04.bak`);
+  });
+
+  it('on Claude Code, the inbound setting needs consent: it explains, then asks, or takes --yes', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const setUp = (argv: string[], answer = '', tty = false) => {
+      const t = rig();
+      const settings = join(t.env.home, '.claude', 'settings.json');
+      writeFileSync(settings, '{"theme": "dark"}\n');
+      const ask = vi.fn(async () => answer);
+      const env = { ...t.env, stdinIsTTY: tty };
+      return { t, settings, ask, run: () => main(['install', ...argv], { ...t.deps, env, ask }) };
+    };
+    const unchanged = (settings: string) => {
+      expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({ theme: 'dark' });
+      expect(existsSync(`${settings}.2026-03-04.bak`)).toBe(false);
+    };
+
+    // No terminal and no --yes: it explains, changes nothing, and exits 1.
+    const quiet = setUp(['--non-interactive']);
+    expect(await quiet.run()).toBe(1);
+    unchanged(quiet.settings);
+    expect(quiet.t.out.text()).toMatch(/every Claude Code session/);
+    expect(quiet.t.out.text()).toMatch(/stop does not undo it/);
+    expect(quiet.t.err.text()).toMatch(/--yes.*--skip-inbound/);
+    expect(readInstallRecord(quiet.t.env)).toMatchObject({ ok: true, record: { harness: 'claude-code' } });
+
+    // A terminal asks. No leaves the file alone and the install still finishes.
+    const no = setUp(['--harness', 'claude-code'], 'n', true);
+    expect(await no.run()).toBe(0);
+    unchanged(no.settings);
+    expect(no.ask).toHaveBeenCalledWith(expect.stringMatching(/Set crossSessionInbound to accept\? \[y\/N\]/));
+
+    const yes = setUp(['--harness', 'claude-code'], 'y', true);
+    expect(await yes.run()).toBe(0);
+    expect(JSON.parse(readFileSync(yes.settings, 'utf8'))).toEqual({ theme: 'dark', crossSessionInbound: 'accept' });
+
+    // --yes sets it with no question. --skip-inbound never touches the file.
+    const flag = setUp(['--non-interactive', '--yes']);
+    expect(await flag.run()).toBe(0);
+    expect(flag.ask).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(flag.settings, 'utf8'))).toEqual({ theme: 'dark', crossSessionInbound: 'accept' });
+
+    const skip = setUp(['--non-interactive', '--skip-inbound']);
+    expect(await skip.run()).toBe(0);
+    expect(skip.ask).not.toHaveBeenCalled();
+    unchanged(skip.settings);
+    expect(skip.t.out.text()).toMatch(/Skipped the inbound setting/);
+  });
+
+  it('--yes and --skip-inbound together are a usage error', async () => {
+    const t = rig();
+    expect(await main(['install', '--yes', '--skip-inbound'], t.deps)).toBe(2);
   });
 
   it('on Claude Code, an invalid settings file stops the install before install.yml', async () => {
     const t = rig();
     const { writeFileSync } = await import('node:fs');
     writeFileSync(join(t.env.home, '.claude', 'settings.json'), '{ broken');
-    expect(await main(['install', '--non-interactive'], t.deps)).toBe(1);
+    expect(await main(['install', '--non-interactive', '--yes'], t.deps)).toBe(1);
     expect(existsSync(join(t.env.home, '.trellis-crew', 'install.yml'))).toBe(false);
   });
 

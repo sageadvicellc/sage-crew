@@ -11,6 +11,10 @@ export type Command =
       harness?: string;
       nonInteractive: boolean;
       reconfigure: boolean;
+      /** --yes: consent to the inbound setting with no question. */
+      yes: boolean;
+      /** --skip-inbound: never change the inbound setting. */
+      skipInbound: boolean;
       transport?: TransportFlag;
     }
   | { name: 'update'; check: boolean }
@@ -22,7 +26,7 @@ export type Command =
 export type ParseResult = { ok: true; command: Command } | { ok: false; message: string };
 
 export const USAGE = `Usage:
-  trellis-crew install [--harness <name>] [--non-interactive] [--reconfigure] [--transport <name>]
+  trellis-crew install [--harness <name>] [--non-interactive] [--reconfigure] [--transport <name>] [--yes | --skip-inbound]
   trellis-crew update [--check]
   trellis-crew start [--workers N] [--roles sagespec.yml] [--merge-reporters] [--yes]
   trellis-crew status
@@ -82,6 +86,8 @@ function parseInstall(args: string[]): ParseResult {
       harness: { type: 'string' },
       'non-interactive': { type: 'boolean', default: false },
       reconfigure: { type: 'boolean', default: false },
+      yes: { type: 'boolean', short: 'y', default: false },
+      'skip-inbound': { type: 'boolean', default: false },
       transport: { type: 'string' },
     },
     false,
@@ -90,7 +96,10 @@ function parseInstall(args: string[]): ParseResult {
     name: 'install',
     nonInteractive: values['non-interactive'] === true,
     reconfigure: values.reconfigure === true,
+    yes: values.yes === true,
+    skipInbound: values['skip-inbound'] === true,
   };
+  if (command.yes && command.skipInbound) return { ok: false, message: '--yes and --skip-inbound cannot be used together' };
   if (typeof values.harness === 'string') command.harness = values.harness;
   if (typeof values.transport === 'string') {
     const transport = TRANSPORTS[values.transport];
