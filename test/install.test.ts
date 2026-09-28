@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { hermesAdapter } from '../src/adapters/hermes.ts';
 import { main, type CliDeps } from '../src/cli.ts';
 import { readInstallRecord, writeInstallRecord } from '../src/store/install-yml.ts';
 import { cliVersion } from '../src/versions.ts';
@@ -54,7 +55,8 @@ describe('install', () => {
 
   it('33: a plugin install that is not built yet exits 1 and says so, and still records the choice', async () => {
     const t = rig();
-    expect(await main(['install', '--harness', 'hermes'], t.deps)).toBe(1);
+    const { installPlugin: _unused, ...unbuilt } = hermesAdapter;
+    expect(await main(['install', '--harness', 'hermes'], { ...t.deps, adapters: { hermes: unbuilt } })).toBe(1);
     expect(t.err.text()).toMatch(/Hermes Agent.*not built yet/);
     expect(readInstallRecord(t.env)).toMatchObject({ ok: true, record: { harness: 'hermes', plugin_version: null } });
   });

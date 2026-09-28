@@ -32,7 +32,7 @@ export async function runStatus(deps: CliDeps): Promise<number> {
   const info = HARNESSES.find((h) => h.id === record.harness);
   const binaryPath = info ? findBinary(info.binary, deps.env.path) : undefined;
   if (adapter?.statusLines && binaryPath !== undefined) {
-    for (const line of await adapter.statusLines({ env: deps.env, runner: deps.runner, binaryPath })) deps.out(line);
+    for (const line of await adapter.statusLines({ env: deps.env, runner: deps.runner, binaryPath, out: deps.out })) deps.out(line);
   }
   return EXIT_OK;
 }

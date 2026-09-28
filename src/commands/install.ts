@@ -76,7 +76,7 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
     deps.err(`${harness.displayName} is not on PATH, so the plugin cannot be installed.`);
     return EXIT_RUNTIME;
   } else {
-    const installed = await adapter.installPlugin({ env: deps.env, runner: deps.runner, binaryPath });
+    const installed = await adapter.installPlugin({ env: deps.env, runner: deps.runner, binaryPath, out: deps.out });
     if (installed.ok) {
       pluginVersion = bundledPluginVersion();
       deps.out(`Installed the trellis-crew plugin ${pluginVersion} on ${harness.displayName}.`);

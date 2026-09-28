@@ -15,6 +15,8 @@ export interface AdapterContext {
   runner: Runner;
   /** The harness binary found on PATH. */
   binaryPath: string;
+  /** Prints one line for the operator. */
+  out: (line: string) => void;
 }
 
 export type LaunchOutcome = { ok: true; entry: TeamEntry } | { ok: false; message: string };

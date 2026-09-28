@@ -87,7 +87,12 @@ export async function launchSession(
     transport: plan.transport,
     ...(plan.mailbox === undefined ? {} : { mailboxPath: plan.mailbox }),
   });
-  return plan.adapter.launch(session.name, kickoff, args, { env: deps.env, runner: deps.runner, binaryPath: plan.binaryPath });
+  return plan.adapter.launch(session.name, kickoff, args, {
+    env: deps.env,
+    runner: deps.runner,
+    binaryPath: plan.binaryPath,
+    out: deps.out,
+  });
 }
 
 function describeEntry(entry: TeamEntry): string {

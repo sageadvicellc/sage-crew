@@ -65,7 +65,7 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
       deps.err(`${name} is not on PATH, so the plugin cannot be updated.`);
       complete = false;
     } else {
-      const updated = await adapter.updatePlugin({ env: deps.env, runner: deps.runner, binaryPath });
+      const updated = await adapter.updatePlugin({ env: deps.env, runner: deps.runner, binaryPath, out: deps.out });
       if (updated.ok) {
         record.plugin_version = bundledPluginVersion();
         deps.out(`Updated the trellis-crew plugin to ${record.plugin_version} on ${name}.`);

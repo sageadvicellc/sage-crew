@@ -44,7 +44,7 @@ export default tseslint.config(
     files: ['**/*.ts', '**/*.js'],
     rules: {
       ...homeBan,
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
   {
