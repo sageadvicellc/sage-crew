@@ -2,6 +2,7 @@ import { constants, copyFileSync, existsSync, lstatSync, readFileSync, realpathS
 import { basename, dirname, join } from 'node:path';
 import { claudeDir, type Env } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
+import { roundTripLoss } from './json-lossless.ts';
 
 /** The value the team needs, so a busy peer queues a message instead of asking a person. */
 export const INBOUND_ACCEPT = 'accept';
@@ -50,6 +51,14 @@ function stop(settingsPath: string, reason: string): InboundResult {
   return { ok: false, code: 1, message: `${settingsPath}: ${reason}. Nothing was changed.` };
 }
 
+function unchangedSince(path: string, text: string): boolean {
+  try {
+    return readFileSync(path, 'utf8') === text;
+  } catch {
+    return false;
+  }
+}
+
 function indentOf(text: string): string {
   return /^\{\s*\n([ \t]+)\S/.exec(text)?.[1] ?? '  ';
 }
@@ -94,6 +103,9 @@ export function setInboundAccept(target: InboundTarget, options: InboundOptions)
       return stop(settingsPath, 'the settings file is not valid JSON');
     }
     if (!isObject(parsed)) return stop(settingsPath, 'the settings file is not a JSON object');
+    // The file is rewritten in full, so a value the round trip would change stops it.
+    const loss = roundTripLoss(text);
+    if (loss !== undefined) return stop(settingsPath, `${loss}. Set ${keyPath.join('.')} by hand`);
     settings = parsed;
   }
 
@@ -134,6 +146,11 @@ export function setInboundAccept(target: InboundTarget, options: InboundOptions)
   }
 
   holder[leaf] = INBOUND_ACCEPT;
+  // Another writer may have changed the file since it was read. Its change
+  // wins: this run stops rather than overwrite it.
+  if (exists && !unchangedSince(writePath, text)) {
+    return stop(settingsPath, 'the settings file changed while install ran. Run install again');
+  }
   try {
     write(writePath, `${JSON.stringify(settings, null, indentOf(text))}\n`, mode);
   } catch {

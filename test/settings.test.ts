@@ -117,6 +117,41 @@ describe('settings writer', () => {
     }
   });
 
+  it('a file that a rewrite would change beyond the one key stops, and writes nothing', () => {
+    const cases: Array<[string, RegExp]> = [
+      ['{"model": "a", "model": "b"}\n', /repeats the key "model"/],
+      ['{"limit": 12345678901234567890}\n', /number/],
+      ['{"ratio": 0.12345678901234567890123}\n', /number/],
+      ['{"huge": 1e400}\n', /number/],
+      ['{"deep": {"x": 1, "x": 2}}\n', /repeats the key "x"/],
+    ];
+    for (const [text, reason] of cases) {
+      const t = setup(text);
+      const result = setInboundAccept(t.target, { now: NOW, out: () => {} });
+      expect(result, text).toMatchObject({ ok: false, code: 1 });
+      if (!result.ok) expect(result.message, text).toMatch(reason);
+      expect(readFileSync(t.path, 'utf8')).toBe(text);
+      expect(readdirSync(t.dir)).toEqual(['settings.json']);
+    }
+    // Ordinary numbers and strings that hold a quote or a brace still pass.
+    const ok = setup('{"n": 42, "f": 1.5, "neg": -3e2, "s": "a \\"quoted\\" {x: 1, x: 2}"}\n');
+    expect(setInboundAccept(ok.target, { now: NOW, out: () => {} })).toMatchObject({ ok: true, changed: true });
+  });
+
+  it('a settings file that changes while install runs is not overwritten', () => {
+    const t = setup(ORIGINAL);
+    writeFileSync(t.backup, 'an earlier backup\n');
+    // The kept-backup line prints between the read and the write. Another
+    // writer changes the file at that moment.
+    const out = (line: string) => {
+      if (line.startsWith('A backup from today')) writeFileSync(t.path, '{"theirs": true}\n');
+    };
+    const result = setInboundAccept(t.target, { now: NOW, out });
+    expect(result).toMatchObject({ ok: false, code: 1 });
+    if (!result.ok) expect(result.message).toMatch(/changed while/);
+    expect(readFileSync(t.path, 'utf8')).toBe('{"theirs": true}\n');
+  });
+
   it('31: a missing configuration folder stops and writes nothing', () => {
     const env = makeTestEnv();
     const result = setInboundAccept(claudeInboundTarget(env), { now: NOW, out: () => {} });
