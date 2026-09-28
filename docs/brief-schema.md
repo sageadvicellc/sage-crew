@@ -9,7 +9,8 @@ One edition is one JSON file, `briefs/YYYY-MM-DD-0900.json` or `-2300.json`, wri
 | `schema_version` | int | `1` |
 | `edition` | object | `date` (YYYY-MM-DD, Eastern), `slot` (`0900` or `2300`), `generated_at` (UTC ISO 8601), `cutoff` (UTC ISO 8601, no data after this instant), `window` `{start, end}` (UTC ISO 8601, the period this edition covers, normally since the previous edition) |
 | `headline` | string | one sentence |
-| `summary` | string[] | three to six lines, each one fact with a number; plain text, never markdown |
+| `summary` | string[] | at most three lines, each one fact with a number; plain text, never markdown |
+| `sections` | Section[] | the narrative arc, in page order: one headline sentence per section, each tied to one chart |
 | `counts` | object | `prs_merged`, `prs_open`, `issues_opened`, `issues_closed`, `decisions_pending`, `decisions_past_default` (ints; null when not read) |
 | `actions` | Action[] | the status table: what needs the operator, sorted red, yellow, green |
 | `merged` | Item[] | pull requests merged in the window, all repos in scope |
@@ -23,6 +24,10 @@ One edition is one JSON file, `briefs/YYYY-MM-DD-0900.json` or `-2300.json`, wri
 | `gaps` | string[] | every value that could not be read, with why |
 | `series` | Series[] | trend data for charts, see below |
 | `sources` | string[] | the commands and files the numbers came from |
+
+## Section
+
+`id`, `headline` (one sentence with the section's number in it), `series_id` (the chart this sentence is about), `note` (one short line or empty), `table` (`actions` | `merged` | `open` | `decisions` | `sessions` | `security` | null: the table rendered under the chart).
 
 ## Action
 
@@ -46,11 +51,11 @@ One edition is one JSON file, `briefs/YYYY-MM-DD-0900.json` or `-2300.json`, wri
 
 ## Series
 
-`id` (string), `title`, `unit`, `kind` (`stacked-bar` | `line` | `bar`), `x` (string[], labels), `groups` (`{name, values: number[]}`[]). First edition ships three: `session-minutes` (stacked bar, one x per session: working, blocked on operator, blocked other, idle), `merged-per-window` (bar, one x per edition so far), `decisions-open` (line, decisions waiting at each edition, with the count over 8 hours as a second group).
+`id` (string), `title`, `unit`, `kind` (`stacked-bar` | `line` | `bar` | `timeline` | `funnel`), `x` (string[], labels), `groups` (`{name, values: number[]}`[]). `timeline` is a stacked bar over time buckets (`x` are UTC hours or edition labels). `funnel` is one group whose values shrink stage by stage (`x` are the stage names). Every edition ships five: `merge-timeline` (timeline, merges per UTC hour by repository), `decisions-funnel` (funnel: posed, answered, waiting, past default), `session-minutes` (stacked bar, one x per session: working, blocked on operator, blocked other, idle), `security-findings` (stacked bar by severity: closed, open), and `merged-per-window` (bar, one x per edition so far).
 
 ## Rendering notes for the compiler
 
-- Order on the page: headline with the cutoff, summary, the actions table (the operator acts here, so it sits above the fold), decisions, merged, open, the pool table (Worker | Lead | Task, from `sessions`) and the session chart, security, spend, next, gaps, sources.
+- Order on the page: headline with the cutoff, summary, the actions table (the operator acts here, so it sits above the fold), then `sections` in order, each as its headline sentence, its chart, and its table, then spend, next, gaps, sources. Prose beyond the headline sentences is the `note` line only.
 - Authoring is JSON only. No markdown body; every string is escaped as text.
 - A decision row links to `comment_url` and shows `default_applies_at` relative to `cutoff`.
 - A `null` number renders as "not read" with the matching `gaps` line, never as 0.
