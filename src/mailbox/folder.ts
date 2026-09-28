@@ -1,6 +1,7 @@
-import { mkdirSync, statSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { expandHome, type Env } from '../env.ts';
+import { privateFolderProblem } from '../fs-private.ts';
 import type { RolesConfig } from '../roles/schema.ts';
 
 /**
@@ -18,10 +19,21 @@ export function mailboxPath(config: Pick<RolesConfig, 'mailbox'>, env: Env): str
 
 export type MailboxResult = { ok: true; path: string; created: boolean } | { ok: false; path: string; message: string };
 
-/** Creates the mailbox folder, readable by the operator only. An existing folder is kept as it is. */
+/**
+ * Creates the mailbox folder, readable by the operator only. An existing
+ * folder is kept only when it is private: a real folder, owned by this
+ * user, with no group or other permission bits. The roles file can name
+ * any folder, such as one in a shared /tmp, so this is checked.
+ */
 export function ensureMailboxFolder(path: string): MailboxResult {
   try {
-    if (statSync(path).isDirectory()) return { ok: true, path, created: false };
+    const stat = lstatSync(path);
+    if (stat.isDirectory() || stat.isSymbolicLink()) {
+      const problem = privateFolderProblem(path);
+      return problem === undefined
+        ? { ok: true, path, created: false }
+        : { ok: false, path, message: `${problem}. The mailbox folder must be private to you` };
+    }
     return { ok: false, path, message: `${path}: a file is in the way of the mailbox folder` };
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {

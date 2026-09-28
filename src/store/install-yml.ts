@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { stateDir, type Env } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
+import { ensurePrivateFolder } from '../fs-private.ts';
 import { isHarnessId, TRANSPORTS, type HarnessId, type Transport } from '../roles/schema.ts';
 
 /** What `install` chose, reused until `install --reconfigure`. */
@@ -55,7 +56,7 @@ export function readInstallRecord(env: Env): ReadResult<InstallRecord> {
 
 /** Writes install.yml atomically, creating the state folder when needed. */
 export function writeInstallRecord(env: Env, record: InstallRecord): void {
-  mkdirSync(stateDir(env), { recursive: true, mode: 0o700 });
+  ensurePrivateFolder(stateDir(env));
   const body = stringify({
     harness: record.harness,
     transport: record.transport,

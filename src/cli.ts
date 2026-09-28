@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { parseCommand, USAGE } from './args.ts';
+import { parseCommand, USAGE, type Command } from './args.ts';
 import { runInstall } from './commands/install.ts';
 import { runRespawn } from './commands/respawn.ts';
 import { confirmFoundRoles, launchTeam, loadForHarness } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runStop } from './commands/stop.ts';
 import { runUpdate } from './commands/update.ts';
-import { EXIT_OK, EXIT_USAGE, type CliDeps } from './deps.ts';
+import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from './deps.ts';
 import { envFromProcess } from './env.ts';
+import { UnsafeFolderError } from './fs-private.ts';
 import { createRunner } from './runner.ts';
 import { cliVersion } from './versions.ts';
 
@@ -23,7 +24,17 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
     deps.err(USAGE);
     return EXIT_USAGE;
   }
-  const { command } = parsed;
+  try {
+    return await dispatch(parsed.command, deps);
+  } catch (error) {
+    // A state folder that is not private stops the command before any write.
+    if (!(error instanceof UnsafeFolderError)) throw error;
+    deps.err(`trellis-crew: ${error.message}. Nothing was written there.`);
+    return EXIT_RUNTIME;
+  }
+}
+
+async function dispatch(command: Command, deps: CliDeps): Promise<number> {
   switch (command.name) {
     case 'help':
       deps.out(USAGE);

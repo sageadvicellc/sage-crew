@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir, type Env } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
+import { ensurePrivateFolder } from '../fs-private.ts';
 import { isHarnessId, TRANSPORTS, type HarnessId, type Transport } from '../roles/schema.ts';
 import type { ReadResult } from './install-yml.ts';
 
@@ -120,7 +121,7 @@ export function readTeamFile(path: string): ReadResult<TeamRecord> {
 
 /** Writes team.json atomically, creating the state folder when needed. */
 export function writeTeam(env: Env, record: TeamRecord): void {
-  mkdirSync(stateDir(env), { recursive: true, mode: 0o700 });
+  ensurePrivateFolder(stateDir(env));
   writeTeamFile(teamJsonPath(env), record);
 }
 

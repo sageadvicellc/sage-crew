@@ -50,6 +50,19 @@ describe('Codex CLI', () => {
     expect(t.out.text()).toMatch(/supervisor/);
   });
 
+  it('the supervisor job file goes only into a private state folder', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    const { codexAdapter } = await import('../src/adapters/codex.ts');
+    const launchAll = codexAdapter.launchAll;
+    if (launchAll === undefined) throw new Error('no launchAll');
+    chmodSync(join(t.env.home, '.trellis-crew'), 0o755);
+    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {} };
+    await expect(launchAll([{ name: 'main', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'))).rejects.toThrow(
+      /open to other users/,
+    );
+    expect(t.runner.calls).toEqual([]);
+  });
+
   it('46: each set field prints one warning, and the session still starts', async () => {
     const t = installedOn('codex', 'file-mailbox');
     const file = writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('autocompact: 400k', 'autocompact: 400k\n    model: model-a'));

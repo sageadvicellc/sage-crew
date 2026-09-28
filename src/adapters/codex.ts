@@ -1,7 +1,9 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../env.ts';
+import { writeFileAtomic } from '../fs-atomic.ts';
+import { ensurePrivateFolder } from '../fs-private.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
@@ -83,9 +85,9 @@ export const codexAdapter: Adapter = {
       sessions: items.map((item) => ({ name: item.name, args: codexExecArgs(item.flagArgs, item.kickoff) })),
     };
     const dir = stateDir(ctx.env);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensurePrivateFolder(dir);
     const jobPath = join(dir, 'codex-supervisor.json');
-    writeFileSync(jobPath, `${JSON.stringify(job, null, 2)}\n`, { mode: 0o600 });
+    writeFileAtomic(jobPath, `${JSON.stringify(job, null, 2)}\n`, 0o600);
     try {
       const { pid } = await ctx.runner.spawnDetached(process.execPath, [supervisorScriptPath(), jobPath], {
         env: ctx.env.vars,
