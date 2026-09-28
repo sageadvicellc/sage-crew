@@ -61,7 +61,7 @@ function parseWorkers(raw: string | undefined): number | undefined | Error {
 }
 
 function parseStart(args: string[]): ParseResult {
-  if (args.includes('--merge-reporters')) {
+  if (args.some((arg) => arg === '--merge-reporters' || arg.startsWith('--merge-reporters='))) {
     return {
       ok: false,
       message: '--merge-reporters was removed, because the default team has no researcher to merge. The default team runs one auditor, benchmark',

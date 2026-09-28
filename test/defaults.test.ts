@@ -86,7 +86,11 @@ describe('default team', () => {
     const t = cliDeps();
     expect(await main(['start', '--merge-reporters'], t.deps)).toBe(2);
     expect(t.err.text()).toMatch(/--merge-reporters was removed, because the default team has no researcher to merge/);
+    const withValue = cliDeps();
+    expect(await main(['start', '--merge-reporters=true'], withValue.deps)).toBe(2);
+    expect(withValue.err.text()).toMatch(/--merge-reporters was removed, because the default team has no researcher to merge/);
     expect(t.startTeam).not.toHaveBeenCalled();
+    expect(withValue.startTeam).not.toHaveBeenCalled();
   });
 
   it('17: --workers 2 --roles f replaces the standby sessions under the file lead', () => {

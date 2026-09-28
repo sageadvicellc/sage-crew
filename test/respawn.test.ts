@@ -2,7 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { main } from '../src/cli.ts';
 import { START_UP_HEADING } from '../src/kickoff/compose.ts';
-import { readTeam } from '../src/store/team-json.ts';
+import { readTeam, writeTeam, type TeamRecord } from '../src/store/team-json.ts';
 import { SMALL_TEAM } from './helpers/roles.ts';
 import { claudeInstalled, detachedAdapter, writeRoles, type Harnessed } from './helpers/team.ts';
 
@@ -135,5 +135,51 @@ describe('respawn', () => {
     const t = claudeInstalled();
     expect(await main(['respawn', 'worker-1'], t.deps)).toBe(1);
     expect(t.runner.calls).toEqual([]);
+  });
+});
+
+describe('a team record from a build that had the researcher', () => {
+  // An older build wrote merge_reporters in the source, and a research
+  // session in the team. This build must read that record and ignore both.
+  function olderRecord(): Harnessed {
+    const t = claudeInstalled({ adapters: { 'claude-code': detachedAdapter('claude-code', CLAUDE_FLAGS) } });
+    const older = {
+      version: 1,
+      harness: 'claude-code',
+      transport: 'native',
+      roles: { file: null, merge_reporters: true },
+      sessions: [
+        { name: 'benchmark', pid: 4100, session_id: null, started: 'start-benchmark' },
+        { name: 'research', pid: 4101, session_id: null, started: 'start-research' },
+      ],
+    };
+    writeTeam(t.env, older as unknown as TeamRecord);
+    for (const pid of [4100, 4101]) t.runner.living.add(pid);
+    t.runner.starts.set(4100, 'start-benchmark');
+    t.runner.starts.set(4101, 'start-research');
+    return t;
+  }
+
+  it('reads it, and merge_reporters changes nothing: benchmark respawns as the auditor alone', async () => {
+    const t = olderRecord();
+    const team = readTeam(t.env);
+    expect(team.ok).toBe(true);
+    if (!team.ok || !team.record) throw new Error('no team');
+    expect(team.record.sessions.map((s) => s.name)).toEqual(['benchmark', 'research']);
+
+    expect(await main(['respawn', 'benchmark'], t.deps)).toBe(0);
+    const launch = t.runner.calls.find((c) => c.kind === 'detached');
+    const kickoff = launch?.args[launch.args.length - 1] ?? '';
+    expect(kickoff).toMatch(/^You are the auditor\./);
+    expect(kickoff).not.toMatch(/You are research/);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill').map((c) => Number(c.command))).toEqual([4100]);
+  });
+
+  it('respawn research exits 2 with the "no longer holds" message, and stops and starts nothing', async () => {
+    const t = olderRecord();
+    expect(await main(['respawn', 'research'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(/The roles file no longer holds a session named "research"\. Nothing was stopped\./);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill' || c.kind === 'detached' || c.kind === 'run')).toEqual([]);
+    expect(t.runner.living.has(4101)).toBe(true);
   });
 });
