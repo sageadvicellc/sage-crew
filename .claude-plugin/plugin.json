@@ -1,7 +1,7 @@
 {
   "name": "trellis-crew",
   "displayName": "trellis-crew",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Sets up a small team of agent sessions that split work, hand off tasks, and report status.",
   "author": {
     "name": "Sage Advice LLC"
@@ -14,7 +14,6 @@
     "./skills/department-auditor/",
     "./skills/department-reporting-chain/",
     "./skills/department-handoff-contract/",
-    "./skills/department-audit-log/",
-    "./skills/department-researcher/"
+    "./skills/department-audit-log/"
   ]
 }

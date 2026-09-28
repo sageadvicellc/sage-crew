@@ -35,9 +35,10 @@ licence.
 | `department-standby` | A worker, who waits for a hand-off and claims it |
 | `department-auditor` | The auditor, who checks the team on a fixed clock |
 | `department-reporting-chain` | The reporting chain, which carries decisions to the operator |
-| `department-researcher` | The researcher, who answers one question at a time from cited sources |
 | `department-handoff-contract` | The hand-off block that a lead sends with each task |
 | `department-audit-log` | The log line that the auditor writes for each check |
+
+The skills for how Sage runs a team, such as decision comments, the status table, and the researcher, are in the sage-crew plugin: https://github.com/sageadvicellc/sage-freebies
 
 ## Build your own config
 
