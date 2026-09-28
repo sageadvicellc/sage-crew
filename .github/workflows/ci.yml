@@ -17,9 +17,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Gap: setup-node is not used yet. It waits for a verified commit SHA,
-      # which the maintainer names. Until then this step checks the runner's
-      # own Node and fails below major version 24, the engines floor.
+      # The maintainer approved this pin on 2026-09-28.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      # The engines floor is major version 24.
       - name: Check the Node version
         run: |
           major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
