@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_MAILBOX, ensureMailboxFolder, mailboxPath } from '../src/mailbox/folder.ts';
@@ -9,7 +9,17 @@ import { writeInstallRecord } from '../src/store/install-yml.ts';
 import { writeTeam } from '../src/store/team-json.ts';
 import { makeTestEnv } from './helpers/env.ts';
 import { capture } from './helpers/io.ts';
+import { repoRoot } from './helpers/paths.ts';
 import { recordingRunner } from './helpers/recording-runner.ts';
+
+describe('file mailbox in the README', () => {
+  it('names the file mailbox as the tier-three path, and no MCP mailbox, as this build carries none', () => {
+    const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(readme).not.toMatch(/MCP mailbox/i);
+    expect(readme).toMatch(/Tier three is a shared file mailbox/);
+    expect(readFileSync(join(repoRoot, 'sagespec.example.yml'), 'utf8')).not.toMatch(/mcp-mailbox/);
+  });
+});
 
 describe('file mailbox folder', () => {
   it('34: the mailbox folder exists after it is ensured, private to the operator', () => {

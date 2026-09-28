@@ -7,7 +7,7 @@
 
 version: 1
 harness: auto            # auto | claude-code | qwen-code | hermes | codex | amp | opencode
-transport: auto          # auto | native | a2a | mcp-mailbox | file-mailbox
+transport: auto          # auto | native | a2a | file-mailbox
 mailbox: ~/.trellis-crew/mailbox   # used only by the mailbox transports
 operator: you            # the person every decision goes to; shown in kickoff messages
 
