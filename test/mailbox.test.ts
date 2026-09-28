@@ -75,6 +75,20 @@ describe('file mailbox folder', () => {
     expect(ensureMailboxFolder(link)).toMatchObject({ ok: false, message: expect.stringMatching(/symlink/) });
   });
 
+  it('a folder that another writer swaps in while it is created is checked again, and refused', () => {
+    const env = makeTestEnv();
+    const path = join(env.home, 'raced');
+    const theirs = join(env.home, 'theirs');
+    mkdirSync(theirs, { mode: 0o700 });
+    // The folder does not exist at the check. Another writer puts a symlink
+    // there before mkdir, which then succeeds on the existing path.
+    const racingMkdir = (target: string) => {
+      symlinkSync(theirs, target);
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+    };
+    expect(ensureMailboxFolder(path, { mkdir: racingMkdir })).toMatchObject({ ok: false, message: expect.stringMatching(/symlink/) });
+  });
+
   it('a folder owned by another user is refused', () => {
     const env = makeTestEnv();
     const path = join(env.home, 'theirs');

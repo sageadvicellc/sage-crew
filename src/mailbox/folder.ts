@@ -25,7 +25,11 @@ export type MailboxResult = { ok: true; path: string; created: boolean } | { ok:
  * user, with no group or other permission bits. The roles file can name
  * any folder, such as one in a shared /tmp, so this is checked.
  */
-export function ensureMailboxFolder(path: string): MailboxResult {
+export function ensureMailboxFolder(
+  path: string,
+  options: { mkdir?: (path: string) => void } = {},
+): MailboxResult {
+  const mkdir = options.mkdir ?? ((target: string) => mkdirSync(target, { recursive: true, mode: 0o700 }));
   try {
     const stat = lstatSync(path);
     if (stat.isDirectory() || stat.isSymbolicLink()) {
@@ -41,9 +45,14 @@ export function ensureMailboxFolder(path: string): MailboxResult {
     }
   }
   try {
-    mkdirSync(path, { recursive: true, mode: 0o700 });
-    return { ok: true, path, created: true };
+    mkdir(path);
   } catch {
     return { ok: false, path, message: `${path}: cannot create the mailbox folder` };
   }
+  // Another writer can put a folder or a symlink there between the check
+  // and mkdir, which then succeeds on it. So the new folder is checked too.
+  const problem = privateFolderProblem(path);
+  return problem === undefined
+    ? { ok: true, path, created: true }
+    : { ok: false, path, message: `${problem}. The mailbox folder must be private to you` };
 }
