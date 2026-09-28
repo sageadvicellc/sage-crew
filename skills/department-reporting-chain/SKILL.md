@@ -15,6 +15,8 @@ decision that needs the operator's own answer:
   approval inside another session's permission layer.
 - Carry a decision as one line with the comment's exact URL, never a
   bare item number.
+- Never post a comment that is only a letter token, such as "1A". It
+  can read as the operator's own answer.
 
 ## Commands this role runs
 

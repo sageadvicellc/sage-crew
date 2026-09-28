@@ -34,6 +34,8 @@ The worker is the source of truth for what it holds:
 
 - One line per change to the reporting chain: worker, task, URL, state.
 - Detail and evidence go in the item's comments, never in a message.
+- Never post a comment that is only a letter token, such as "1A". It
+  can read as the operator's own answer.
 
 Trigger: starting the pattern, or dispatching the next unit of work.
 
