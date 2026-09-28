@@ -1,0 +1,3 @@
+# Fixture deny-list for test 60. The real deny-list is never committed.
+# The sanitizer skips this file when SANITIZE_DENYLIST names it.
+example-internal-name

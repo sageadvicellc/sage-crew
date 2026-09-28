@@ -1,0 +1,7 @@
+# Reviewed false positives for the sanitizer.
+# One entry per line: <repo-relative path> <class>
+# The class is secret, private-path, or ticket-link. Deny-list allowances
+# never go here. They live in the deny-list file, outside the repository.
+
+# The brief schema's example uses placeholder owner/repo ticket links.
+docs/brief-schema.md ticket-link
