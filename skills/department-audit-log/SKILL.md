@@ -5,10 +5,21 @@ description: Writes one dated log line for the sage-crew auditor role. Use when 
 
 ## The audit log line
 
-The auditor writes one dated log line at each check, in a fixed field
-order. The spec names this rule but does not name the fields yet. Do
-not invent a field order here. A later spec update names it.
+At each check, the auditor writes one line per session in the shared
+log. The fields are separated by a tab, in this order:
+
+1. `time`: the check's UTC time, read from the clock, ISO 8601.
+2. `session`: the session's name.
+3. `state`: `working`, `blocked`, `idle`, or `done`, from the job
+   record.
+4. `task_url`: the URL of the item the session holds, or `-`.
+5. `finding`: one line, or `ok` when the check found nothing.
+
+Write a value that could not be read as `gap: <reason>`, never as a
+guess. The `state` values match the brief schema's `state_now`, so a
+brief can be built from the log.
 
 Trigger: the auditor about to record a check.
 
-Writes: one line in the shared log, in a fixed field order.
+Writes: one line per session in the shared log, in the field order
+above.

@@ -113,9 +113,13 @@ Peer messaging is built in. A session lists its peers with the
 `ListAgents` tool and sends plain text to one by name with `SendMessage`.
 On macOS and Linux the message travels over a per-session Unix domain
 socket, never through the vendor's servers. Inbound messages are governed
-by the `crossSessionInbound` setting, with `accept`, `hold`, or `refuse`;
-the CLI sets it to `accept` for the team's sessions so a busy peer queues
-a message instead of asking a person to approve it. The documented queue
+by the `crossSessionInbound` setting, with `accept`, `hold`, or `refuse`.
+The CLI sets it to `accept` so a busy peer queues a message instead of
+asking a person to approve it. `sage-crew install` writes it into the
+reader's Claude Code user settings file, `settings.json` in the
+configuration directory, after it copies that file to a dated backup
+beside it, and prints both paths. A user setting applies to every Claude
+Code session the reader runs, not only the team's. The documented queue
 holds 50 accepted messages, and a session in a container cannot reach one
 on the host. A `-p` session binds an inbox socket too unless `--bare` is
 set, so a headless worker can still receive.
@@ -295,6 +299,35 @@ for a unit of work in one of two ways.
 On Claude Code, a subagent takes `model` on each call, and a subagent
 definition takes `model` and `effort` in its frontmatter.
 
+The hand-off contract carries the profile as an optional fourth part,
+after the unit, the done signal, and where the result will live. The
+`department-handoff-contract` skill states it.
+
+### The researcher
+
+The `research` session runs the `department-researcher` skill. It takes
+one question at a time from the reporting chain or the lead, claims it
+by name, answers it from sources it cites with a retrieval date, writes
+a figure it cannot find as missing, and reports the finished document's
+location in one line.
+
+### The audit log line
+
+At each check, the auditor writes one line per session in the shared
+log. The fields are separated by a tab, in this order:
+
+| # | Field | Value |
+|---|---|---|
+| 1 | `time` | the check's UTC time, read from the clock, ISO 8601 |
+| 2 | `session` | the session's name |
+| 3 | `state` | `working`, `blocked`, `idle`, or `done`, from the job record |
+| 4 | `task_url` | the URL of the item the session holds, or `-` |
+| 5 | `finding` | one line, or `ok` when the check found nothing |
+
+The `state` values are the brief schema's `state_now` values, so a brief
+can be built from the log. A value the auditor could not read is written
+as `gap: <reason>`, never as a guess.
+
 ## 4. The roles file
 
 `sage-crew --roles roles.yml` replaces the default team. The file is YAML.
@@ -348,9 +381,12 @@ cannot tell which lead owns the new workers.
 | Codex CLI | copy each skill folder into `~/.agents/skills/` | `~/.agents/skills/<skill>/` |
 | Amp | `amp skill add <source> --global` | `~/.config/agents/skills/` |
 
-3. Write `~/.sage-crew/config.yml` with the harness, the transport, and
+3. On Claude Code, copy the user settings file to a dated backup beside
+   it, then set `crossSessionInbound` to `accept` in it, as in
+   section 2. Print the file's path and the backup's path.
+4. Write `~/.sage-crew/config.yml` with the harness, the transport, and
    the installed plugin version.
-4. For a mailbox transport, write the MCP mailbox entry into the harness's
+5. For a mailbox transport, write the MCP mailbox entry into the harness's
    own MCP configuration, or create the mailbox folder for the file
    transport.
 
@@ -395,17 +431,27 @@ The maintainer answered these on 2026-09-28, on issue 4 of this
 repository, the CLI's implementation plan. The numbers are the issue's
 decision numbers.
 
+- Decision 1: Where the CLI sets `crossSessionInbound`. Answer A: in the
+  reader's Claude Code user settings file, after a backup of that file.
+  Applied in sections 2 and 5.
 - Decision 2: Who keeps `codex exec` alive. Answer A: a detached supervisor.
   `start` returns at once, and `stop` ends the supervisor and its
   children. Applied in section 2.
 - Decision 3: The researcher skill and the audit-log fields. Answer A: add a
   `department-researcher` skill and the audit-log field order to the
   specification first. Build steps 1 to 7 of the plan do not wait on
-  them; the kickoff and auditor steps do.
+  them; the kickoff and auditor steps do. Applied in section 3 and in
+  the `department-researcher` and `department-audit-log` skills.
 - Decision 4: The start-up block on a custom roles file. Answer A: the CLI adds it
   to every roles file. Applied in section 3.
 - Decision 5: `--workers` together with `--roles`. Answer B: `--workers N`
   overrides the file's `standby` sessions. Applied in section 4.
+- Decision 6: Where the sanitizer's deny-list lives. Answer A: in a local
+  file outside the repository, named by the `SANITIZE_DENYLIST`
+  environment variable, and in a CI secret with the same content. The
+  list is never committed. An allowance for one file that a deny-listed
+  word names, such as the default config file of decision 12, lives in
+  the same file and the same secret, not in the repository.
 - Decision 7: What `stop` does to an Amp thread. Answer B: it leaves the thread
   running and prints its id. Applied in section 2.
 - Decision 8: The minimum Node version. Answer B: Node 24, `engines.node >=24`.
@@ -418,6 +464,14 @@ decision numbers.
 - Decision 11: Model and effort in the default team. Answer A: none ship. The
   fields stay unset, and `roles.example.yml` shows them commented out.
   Applied in sections 3 and 4.
+- Decision 12: The project name and the default config file. The
+  operator decided: the project becomes `trellis-crew`, and the default
+  config file becomes `sagespec.yml`, in place of `roles.yml`. Not yet
+  applied in this document. After the operator renames the repository,
+  one change renames the command, the package, the state folder, and the
+  example file, makes the CLI read `./sagespec.yml` by default, and
+  turns `--roles <file>` into `--config <file>`. The operator publishes
+  the package under the new name.
 
 ## Gaps
 
@@ -434,15 +488,11 @@ decision numbers.
   subagents or sessions.
 - No measurement exists yet for how many sessions one machine runs before
   the harness or the model provider rate-limits them.
-- The `department-researcher` skill and the audit-log field order are not
-  written yet (decision 3).
 - `--autocompact`, `--model`, and `--effort` are verified on Claude Code
   only. No other harness's matching flags were checked.
 - Claude Code documents no per-call `effort` for a subagent, so a task
   profile's `effort` reaches a subagent only through a subagent
   definition's frontmatter.
-- The hand-off contract skill does not yet name a task profile as part
-  of a hand-off.
 
 ## Sources
 
