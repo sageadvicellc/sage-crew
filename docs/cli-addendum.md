@@ -20,12 +20,12 @@ Commands:
 ```
 trellis-crew install            # detect the harness, confirm it, install the plugin
 trellis-crew update             # update the CLI and the plugin
-trellis-crew start [--workers N] [--config sagespec.yml] # start the team
+trellis-crew start [--workers N] [--roles sagespec.yml] # start the team
 trellis-crew status             # list the team's sessions and their state
 trellis-crew stop               # stop every session the CLI started
 trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N]
                                 # restart one session with new launch flags
-trellis-crew --config sagespec.yml # shorthand for start with a roles file
+trellis-crew --roles sagespec.yml # shorthand for start with a roles file
 ```
 
 ## 1. Harness detection and confirmation
@@ -63,7 +63,7 @@ Use Claude Code? [Y/n/other]
 `--harness <name>` skips the question. `--non-interactive` takes the best
 candidate and prints the choice. With no candidate the CLI stops and
 prints the install page of each supported harness. The choice is written
-to `~/.trellis-crew/config.yml` and reused until the reader runs
+to `~/.trellis-crew/install.yml` and reused until the reader runs
 `trellis-crew install --reconfigure`.
 
 ### Transport follows the tier
@@ -229,7 +229,7 @@ gets the same warning as at `start`.
 
 Without a roles file, `trellis-crew start` creates four reporter sessions
 and three workers. A roles file is `./sagespec.yml` in the current folder,
-or the file named by `--config`. `--workers N` changes the count.
+or the file named by `--roles`. `--workers N` changes the count.
 
 | Session | Role | Reports to | Autocompact | What it does |
 |---|---|---|---|---|
@@ -334,7 +334,7 @@ as `gap: <reason>`, never as a guess.
 A roles file replaces the default team. It is one half of a config: it
 sets the team layout, and the agent definitions in `skills/` are the other
 half. `trellis-crew start` reads
-`./sagespec.yml` by default, and `--config <file>` names another file.
+`./sagespec.yml` by default, and `--roles <file>` names another file.
 The file is YAML. `sagespec.example.yml` in this repository matches the
 default team.
 
@@ -365,7 +365,7 @@ count outside 100k to 1M fails, and so does an `effort` other than `low`,
 `medium`, `high`, `xhigh`, or `max`. A failed check prints the line and
 starts nothing.
 
-`--workers N` together with `--config` overrides the file. The CLI
+`--workers N` together with `--roles` overrides the file. The CLI
 replaces the file's `standby` sessions with N generated workers, named
 `worker-1` to `worker-N`, each owned by the file's lead and given `400k`.
 A file with more than one lead fails with exit code 2, because the CLI
@@ -389,7 +389,7 @@ cannot tell which lead owns the new workers.
 3. On Claude Code, copy the user settings file to a dated backup beside
    it, then set `crossSessionInbound` to `accept` in it, as in
    section 2. Print the file's path and the backup's path.
-4. Write `~/.trellis-crew/config.yml` with the harness, the transport, and
+4. Write `~/.trellis-crew/install.yml` with the harness, the transport, and
    the installed plugin version.
 5. For a mailbox transport, write the MCP mailbox entry into the harness's
    own MCP configuration, or create the mailbox folder for the file
@@ -409,7 +409,7 @@ separate marketplace; that was decided in the plugin specification.
 3. Print the harness's own update command without running it: `claude
    update`, `hermes update`, `amp update`, and the installer script for
    Codex. Gap: no update command for Qwen Code itself is documented.
-4. Rewrite the version fields in `~/.trellis-crew/config.yml`.
+4. Rewrite the version fields in `~/.trellis-crew/install.yml`.
 
 `trellis-crew update --check` prints the versions and changes nothing.
 
@@ -449,13 +449,13 @@ decision numbers.
   the `department-researcher` and `department-audit-log` skills.
 - Decision 4: The start-up block on a custom roles file. Answer A: the CLI adds it
   to every roles file. Applied in section 3.
-- Decision 5: `--workers` together with `--config`. Answer B: `--workers N`
+- Decision 5: `--workers` together with `--roles`. Answer B: `--workers N`
   overrides the file's `standby` sessions. Applied in section 4.
 - Decision 6: Where the sanitizer's deny-list lives. Answer A: in a local
   file outside the repository, named by the `SANITIZE_DENYLIST`
   environment variable, and in a CI secret with the same content. The
   list is never committed. An allowance for one file that a deny-listed
-  word names, such as the default config file of decision 12, lives in
+  word names, such as the default roles file of decision 12, lives in
   the same file and the same secret, not in the repository.
 - Decision 7: What `stop` does to an Amp thread. Answer B: it leaves the thread
   running and prints its id. Applied in section 2.
@@ -469,15 +469,21 @@ decision numbers.
 - Decision 11: Model and effort in the default team. Answer A: none ship. The
   fields stay unset, and `sagespec.example.yml` shows them commented out.
   Applied in sections 3 and 4.
-- Decision 12: The project name and the default config file. The
+- Decision 12: The project name and the default roles file. The
   operator decided: the project is renamed from `sage-crew` to
   `trellis-crew`, and the default roles file is `sagespec.yml`, in place
   of `roles.yml`. Applied throughout this document, and names in the
   earlier decisions are updated to match: the command, the package, and
   the state folder are `trellis-crew`, the example file is
   `sagespec.example.yml`, the CLI reads `./sagespec.yml` by default, and
-  `--roles <file>` is now `--config <file>`. The operator publishes the
-  package under the new name.
+  the flag that names another roles file is `--roles <file>` (decision 13).
+  The operator publishes the package under the new name.
+- Decision 13: The word "config". Answer A: a config is the roles file
+  plus the agent definitions, and "roles file" stays the name of
+  `sagespec.yml`. The flag that names another roles file is
+  `--roles <file>`. The install file is `~/.trellis-crew/install.yml`.
+  Applied in the command list and sections 1, 3, 4, and 5, and in
+  `sagespec.example.yml`.
 
 ## Gaps
 

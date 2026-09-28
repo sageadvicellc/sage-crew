@@ -1,5 +1,5 @@
 # trellis-crew roles file. Save it as sagespec.yml, which trellis-crew start
-# reads by default, or pass another file with --config <file>.
+# reads by default, or pass another file with --roles <file>.
 # This file is one half of your config: it sets the team layout. The agent
 # definitions, the skills/department-* prompts, are the other half. Change
 # either one to change how your team works.
