@@ -33,7 +33,7 @@ async function chooseHarness(options: InstallOptions, deps: CliDeps): Promise<{ 
     deps.out(`Using ${harness.displayName}, stored in install.yml. Run trellis-crew install --reconfigure to choose again.`);
     return { ok: true, harness, stored: record.transport };
   }
-  const candidates = options.harness === undefined ? await probeHarnesses(deps.env, deps.runner) : [];
+  const candidates = options.harness === undefined ? await probeHarnesses(deps.env, deps.runner, { warn: deps.err }) : [];
   const result = await confirmHarness({
     candidates,
     ...(options.harness === undefined ? {} : { harnessFlag: options.harness }),

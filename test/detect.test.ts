@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { main } from '../src/cli.ts';
 import { confirmHarness } from '../src/detect/confirm.ts';
 import { HARNESSES, probeHarnesses, sortCandidates, type Candidate } from '../src/detect/probe.ts';
 import { createRunner } from '../src/runner.ts';
@@ -91,8 +92,23 @@ describe('detection', () => {
     const throwing = recordingRunner(() => {
       throw new Error('spawn exploded');
     });
-    const again = await probeHarnesses(makeTestEnv(), throwing);
+    const warnings: string[] = [];
+    const again = await probeHarnesses(makeTestEnv(), throwing, { warn: (line) => warnings.push(line) });
     expect(find(again, 'claude-code')?.hits).toBe(1);
+    // An unexpected throw is a miss, but it leaves a trace.
+    expect(warnings.some((w) => /claude --version.*spawn exploded/.test(w))).toBe(true);
+  });
+
+  it('install passes probe warnings to standard error', async () => {
+    const throwing = recordingRunner((_command, args) => {
+      if (args[0] === '--version') throw new Error('spawn exploded');
+      return { code: 0, stdout: '', stderr: '', timedOut: false };
+    });
+    const env = makeTestEnv();
+    const err = capture();
+    const out = capture();
+    await main(['install', '--non-interactive'], { env, runner: throwing, out: out.write, err: err.write });
+    expect(err.text()).toMatch(/warning: .*--version.*spawn exploded/);
   });
 
   it('24: candidates sort by tier, then by hits', async () => {

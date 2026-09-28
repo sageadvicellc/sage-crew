@@ -95,6 +95,8 @@ export interface Candidate {
 export interface ProbeOptions {
   /** How long a version command may run before it counts as a miss. */
   timeoutMs?: number;
+  /** Prints one line about a probe that failed in a way it did not expect. */
+  warn?: (line: string) => void;
 }
 
 export const DEFAULT_PROBE_TIMEOUT_MS = 5000;
@@ -120,7 +122,13 @@ function versionFrom(stdout: string): string | undefined {
   return /\d+\.\d+(?:\.\d+)?(?:[-+][\w.-]+)?/.exec(stdout)?.[0];
 }
 
-async function probeOne(harness: HarnessInfo, env: Env, runner: Runner, timeoutMs: number): Promise<Candidate> {
+async function probeOne(
+  harness: HarnessInfo,
+  env: Env,
+  runner: Runner,
+  timeoutMs: number,
+  warn: (line: string) => void,
+): Promise<Candidate> {
   const candidate: Candidate = { harness, hits: 0 };
   const binaryPath = findBinary(harness.binary, env.path);
   if (binaryPath !== undefined) {
@@ -134,8 +142,11 @@ async function probeOne(harness: HarnessInfo, env: Env, runner: Runner, timeoutM
           const version = versionFrom(result.stdout);
           if (version !== undefined) candidate.version = version;
         }
-      } catch {
-        // A version command that cannot run is a miss, never a crash.
+      } catch (error) {
+        // Runner.run never throws, so a throw here is unexpected. It is a
+        // miss, never a crash, and it leaves a trace.
+        const reason = error instanceof Error ? error.message : String(error);
+        warn(`warning: ${harness.binary} ${harness.versionArgs.join(' ')} failed unexpectedly, so it counts as a miss: ${reason}`);
       }
     }
   }
@@ -156,6 +167,7 @@ export function sortCandidates(candidates: readonly Candidate[]): Candidate[] {
 /** Probes every harness and returns the candidates, best first. */
 export async function probeHarnesses(env: Env, runner: Runner, options: ProbeOptions = {}): Promise<Candidate[]> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
-  const results = await Promise.all(HARNESSES.map((h) => probeOne(h, env, runner, timeoutMs)));
+  const warn = options.warn ?? (() => {});
+  const results = await Promise.all(HARNESSES.map((h) => probeOne(h, env, runner, timeoutMs, warn)));
   return sortCandidates(results.filter((c) => c.hits > 0));
 }
