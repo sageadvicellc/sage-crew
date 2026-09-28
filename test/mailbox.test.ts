@@ -89,6 +89,38 @@ describe('file mailbox folder', () => {
     expect(ensureMailboxFolder(path, { mkdir: racingMkdir })).toMatchObject({ ok: false, message: expect.stringMatching(/symlink/) });
   });
 
+  it('a parent folder that other users can write, with no sticky bit, is refused', () => {
+    const env = makeTestEnv();
+    const shared = join(env.home, 'shared');
+    mkdirSync(shared);
+    chmodSync(shared, 0o777);
+    const path = join(shared, 'deeper', 'mailbox');
+    const result = ensureMailboxFolder(path);
+    expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/shared, a parent of .*mailbox, can be written by other users/) });
+    expect(existsSync(join(shared, 'deeper'))).toBe(false);
+
+    // An existing private mailbox under that parent is refused too.
+    mkdirSync(join(shared, 'kept'), { mode: 0o700 });
+    expect(ensureMailboxFolder(join(shared, 'kept'))).toMatchObject({ ok: false, message: expect.stringMatching(/can be written by other users/) });
+
+    // A sticky parent, such as /tmp, is allowed.
+    chmodSync(shared, 0o1777);
+    expect(ensureMailboxFolder(path)).toMatchObject({ ok: true, created: true });
+    chmodSync(shared, 0o700);
+  });
+
+  it('a parent folder owned by another user is refused, and root is allowed', () => {
+    const env = makeTestEnv();
+    const own = process.getuid?.();
+    if (own === undefined) return;
+    const path = join(env.home, 'mail');
+    const other = ensureMailboxFolder(path, { uid: own + 1 });
+    expect(other).toMatchObject({ ok: false, message: expect.stringMatching(/a parent of .*mail, belongs to another user/) });
+    expect(existsSync(path)).toBe(false);
+    // Every ancestor above the fixture home belongs to root or to this user.
+    expect(ensureMailboxFolder(path, { uid: own })).toMatchObject({ ok: true, created: true });
+  });
+
   it('a folder owned by another user is refused', () => {
     const env = makeTestEnv();
     const path = join(env.home, 'theirs');
