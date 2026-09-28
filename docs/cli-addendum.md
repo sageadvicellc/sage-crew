@@ -43,7 +43,7 @@ confident candidate.
 | Qwen Code | `qwen` | gap: no shell-level version flag documented; `/about` inside a session | `~/.qwen` | one, native |
 | Hermes Agent | `hermes` | `hermes --version` | `~/.hermes` | two, A2A |
 | Codex CLI | `codex` | gap: `--version` not confirmed on a fetched page | `~/.codex` (or `CODEX_HOME`) | three, mailbox |
-| Amp | `amp` | `amp version` | `~/.config/amp` (path from a search snippet, not a fetched page) | three, mailbox |
+| Amp | `amp` | `amp version` | `~/.config/amp/settings.json` (or `settings.jsonc`) on macOS and Linux; `--settings-file <path>` overrides | three, mailbox |
 
 Every other harness in the plugin specification's tier table is detected
 by binary name only and lands on tier three.
@@ -130,10 +130,17 @@ with a session registry, addressed send by name, and delivery receipts.
 Gaps: no shell-level flag to name a session at start, and no shell-level
 detach flag, are documented. The CLI therefore starts each session as its
 own process with `qwen -p`, gives it a name through the first prompt, and
-reads `qwen sessions ps` for status. The exact setting names and defaults
-of the cross-session protocol are cited only from the documentation page
-named in the sources, and the CLI treats them as a gap until a build
-verifies them against a running install.
+reads `qwen sessions ps` for status. The cross-session protocol is on by
+default: `agents.crossSessionMessaging` is a boolean, default `true`, and
+`agents.crossSessionInbound` takes `accept`, `hold`, or `refuse`, unset by
+default, both in the user file `~/.qwen/settings.json` (a project file
+`.qwen/settings.json` may only tighten them). The CLI sets
+`crossSessionInbound` to `accept` in the user file for the team's
+sessions, as it does for Claude Code. The registry is a record per
+session under `~/.qwen/sessions/`, a name that matches two sessions is
+an error, and every send returns a `delivery_status` of `held`,
+`delivered`, `denied`, `refused`, `expired`, `misaddressed`, or
+`dropped`.
 
 ### Hermes Agent, tier two
 
@@ -308,12 +315,11 @@ request that carries this document.
 - Codex CLI documents no background flag, no session-name flag, and no
   cross-session messaging, so the CLI supervises each process itself.
 - Qwen Code documents no shell-level version flag, no name-at-start flag,
-  and no detach flag; the cross-session protocol's setting names were not
-  re-read from a single fetched page.
+  and no detach flag.
 - Hermes Agent documents no same-machine session-to-session messaging and
   no shell-level detach flag.
-- Amp documents no discovery between two already-running threads, and its
-  configuration path was read from a search snippet, not a fetched page.
+- Amp documents no discovery between two already-running threads and no
+  command that stops a thread.
 - No harness other than Claude Code documents a cap on concurrent
   subagents or sessions.
 - No measurement exists yet for how many sessions one machine runs before
@@ -338,6 +344,9 @@ request that carries this document.
    https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/,
    retrieved 2026-09-28. Cross-session protocol:
    https://qwenlm.github.io/qwen-code-docs/en/users/features/cross-session-protocol/,
+   retrieved 2026-09-28. Settings, `agents.crossSessionMessaging` and
+   `agents.crossSessionInbound`:
+   https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/,
    retrieved 2026-09-28. Extensions:
    https://qwenlm.github.io/qwen-code-docs/en/developers/extensions/extension/,
    retrieved 2026-09-28.
@@ -356,6 +365,8 @@ request that carries this document.
 8. Amp CLI, orbs, agent-to-agent, skills:
    https://ampcode.com/docs/cli, https://ampcode.com/docs/cli/spawning-orbs,
    https://ampcode.com/docs/orbs/agent-to-agent, and
-   https://ampcode.com/docs/customize/skills, retrieved 2026-09-28.
+   https://ampcode.com/docs/customize/skills, retrieved 2026-09-28. The
+   settings file path: https://ampcode.com/docs/cli/settings, retrieved
+   2026-09-28.
 9. The three-tier table and the mailbox design: the sage-crew plugin
    specification, 2026-09-28.
