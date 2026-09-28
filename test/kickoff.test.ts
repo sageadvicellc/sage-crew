@@ -55,13 +55,11 @@ describe('kickoff composer', () => {
     expect(reporter).not.toMatch(/subagents at once/);
   });
 
-  it('42: benchmark names its clock, and research sends nothing', () => {
+  it('42: benchmark names its clock, and no session is a researcher', () => {
     const team = defaultTeam();
     const benchmark = startUp(composeKickoff(team, session(team, 'benchmark'), claude));
     expect(benchmark).toMatch(/to personal-assistant: "Auditor clock started at <time>, interval 30m\. First check at <time>\."/);
-    const research = startUp(composeKickoff(team, session(team, 'research'), claude));
-    expect(research).toMatch(/Start-up message: none\. Send nothing at kickoff/);
-    expect(research).not.toMatch(/"I am|Auditor clock|No work yet/);
+    expect(benchmark).not.toMatch(/researcher/);
     const chain = startUp(composeKickoff(team, session(team, 'personal-assistant'), claude));
     expect(chain).toContain(
       '"I am the reporting chain. Send me one line per change. Decisions go to the operator through me."',
@@ -96,7 +94,7 @@ describe('kickoff composer', () => {
       expect(block, name).toContain('- build: model model-a, effort high');
       expect(block, name).toContain('- review: model unset, effort medium');
     }
-    for (const name of ['personal-assistant', 'benchmark', 'research']) {
+    for (const name of ['personal-assistant', 'benchmark']) {
       expect(startUp(composeKickoff(team, session(team, name), claude)), name).not.toContain('- build:');
     }
   });

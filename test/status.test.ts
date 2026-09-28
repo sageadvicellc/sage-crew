@@ -32,7 +32,7 @@ describe('status', () => {
     expect(await main(['start'], t.deps)).toBe(0);
     t.out.lines.length = 0;
     expect(await main(['status'], t.deps)).toBe(0);
-    for (const name of ['personal-assistant', 'main', 'benchmark', 'research', 'worker-1', 'worker-2', 'worker-3']) {
+    for (const name of ['personal-assistant', 'main', 'benchmark', 'worker-1', 'worker-2', 'worker-3']) {
       expect(t.out.text()).toContain(name);
     }
   });

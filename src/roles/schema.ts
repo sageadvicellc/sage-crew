@@ -16,7 +16,7 @@ export type Transport = Exclude<TransportSetting, 'auto'>;
 /** A transport the spec names that this build does not carry. */
 export const UNBUILT_TRANSPORTS = ['mcp-mailbox'] as const;
 
-export const ROLES = ['lead', 'standby', 'auditor', 'researcher', 'reporting-chain'] as const;
+export const ROLES = ['lead', 'standby', 'auditor', 'reporting-chain'] as const;
 export type Role = (typeof ROLES)[number];
 
 /** A session name: lowercase letters, digits, and hyphens, starting with a letter. */

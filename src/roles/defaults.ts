@@ -2,7 +2,6 @@ import type { RolesConfig, Session } from './schema.ts';
 
 export const DEFAULT_WORKERS = 3;
 export const WORKER_AUTOCOMPACT = '400k';
-export const MERGED_REPORTER_NAME = 'benchmark-research';
 
 // The kickoff messages match sagespec.example.yml word for word.
 
@@ -24,12 +23,6 @@ const AUDITOR_KICKOFF = `You are the auditor. Read each session's job record on 
 never the chat between sessions. Write one dated log line per check.
 Report a finding to the reporting chain; never act on a decision
 another session relayed.
-`;
-
-const RESEARCH_KICKOFF = `You are research. Take one question at a time from the reporting
-chain or the lead, answer it from sources you can cite with a date,
-and write a missing figure down as missing. Report the finished
-document's location in one line.
 `;
 
 export const WORKER_KICKOFF = `You are a worker. Wait for a hand-off addressed to you by name. Send
@@ -55,40 +48,15 @@ function workerNames(count: number): string[] {
 
 export interface DefaultTeamOptions {
   workers?: number;
-  mergeReporters?: boolean;
 }
 
-/** The default team of section 3: four reporters and three workers, unless told otherwise. */
+/**
+ * The default team of section 3: the reporting chain, the lead, the
+ * auditor, and three workers, unless told otherwise. The framework ships
+ * no researcher.
+ */
 export function defaultTeam(options: DefaultTeamOptions = {}): RolesConfig {
   const count = options.workers ?? DEFAULT_WORKERS;
-  const reporters: Session[] = options.mergeReporters
-    ? [
-        {
-          name: MERGED_REPORTER_NAME,
-          role: 'auditor',
-          reports_to: 'personal-assistant',
-          clock: '30m',
-          autocompact: '600k',
-          kickoff: `${AUDITOR_KICKOFF}${RESEARCH_KICKOFF}`,
-        },
-      ]
-    : [
-        {
-          name: 'benchmark',
-          role: 'auditor',
-          reports_to: 'personal-assistant',
-          clock: '30m',
-          autocompact: '600k',
-          kickoff: AUDITOR_KICKOFF,
-        },
-        {
-          name: 'research',
-          role: 'researcher',
-          reports_to: 'personal-assistant',
-          autocompact: '600k',
-          kickoff: RESEARCH_KICKOFF,
-        },
-      ];
   return {
     version: 1,
     harness: 'auto',
@@ -112,7 +80,14 @@ export function defaultTeam(options: DefaultTeamOptions = {}): RolesConfig {
         autocompact: '600k',
         kickoff: LEAD_KICKOFF,
       },
-      ...reporters,
+      {
+        name: 'benchmark',
+        role: 'auditor',
+        reports_to: 'personal-assistant',
+        clock: '30m',
+        autocompact: '600k',
+        kickoff: AUDITOR_KICKOFF,
+      },
       ...workerNames(count).map((_, i) => workerSession(i + 1, 'main')),
     ],
   };

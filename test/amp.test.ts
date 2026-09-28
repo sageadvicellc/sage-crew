@@ -15,7 +15,7 @@ describe('Amp', () => {
     expect(await main(['start'], t.deps)).toBe(0);
     const runs = t.runner.calls.filter((c) => c.kind === 'run');
     expect(t.runner.calls.filter((c) => c.kind === 'detached')).toEqual([]);
-    expect(runs).toHaveLength(7);
+    expect(runs).toHaveLength(6);
     const mainRun = runs.find((c) => c.args[1] === 'main');
     expect(mainRun?.command).toBe(amp);
     expect(mainRun?.args.slice(0, 3)).toEqual(['--title', 'main', '-ox']);

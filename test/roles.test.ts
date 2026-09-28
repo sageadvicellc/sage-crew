@@ -70,10 +70,19 @@ describe('roles file', () => {
   });
 
   it('6: zero or two reporting chains fail', () => {
-    const none = SMALL_TEAM.replace('role: reporting-chain', 'role: researcher');
+    const none = SMALL_TEAM.replace('role: reporting-chain', 'role: auditor\n    clock: 30m');
     expect(errorsOf(none).some((e) => /reporting-chain/.test(e.message))).toBe(true);
     const two = SMALL_TEAM.replace('role: auditor', 'role: reporting-chain').replace('    clock: 30m\n', '');
     expectFailAt(two, lineOf(two, 'name: watcher') + 1, /reporting-chain/);
+  });
+
+  it('the researcher role is not in this build, and the error names the value and the valid roles', () => {
+    const text = SMALL_TEAM.replace('role: auditor', 'role: researcher').replace('    clock: 30m\n', '');
+    expectFailAt(
+      text,
+      lineOf(text, 'role: researcher'),
+      /session "watcher": role "researcher" is not a role in this build\. Use one of lead, standby, auditor, reporting-chain/,
+    );
   });
 
   it('7: a worker with zero or two leads fails', () => {

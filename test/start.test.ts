@@ -12,7 +12,7 @@ describe('start on Claude Code', () => {
     const t = claudeInstalled();
     expect(await main(['start'], t.deps)).toBe(0);
     const runs = t.runner.calls.filter((c) => c.kind === 'run');
-    expect(runs).toHaveLength(7);
+    expect(runs).toHaveLength(6);
     for (const call of runs) {
       expect(call.command).toBe(join(fixtureBin, 'claude'));
       expect(call.args.slice(0, 3)).toEqual(['--bg', '--name', call.args[2]]);
@@ -60,7 +60,7 @@ describe('start on Claude Code', () => {
     expect(team.ok && team.record?.harness).toBe('claude-code');
     if (!team.ok || !team.record) return;
     expect(team.record.sessions.map((s) => s.name)).toEqual([
-      'personal-assistant', 'main', 'benchmark', 'research', 'worker-1', 'worker-2', 'worker-3',
+      'personal-assistant', 'main', 'benchmark', 'worker-1', 'worker-2', 'worker-3',
     ]);
     // Gaps: the pid behind a --bg session and the session id format are not documented.
     for (const entry of team.record.sessions) expect(entry).toMatchObject({ pid: null, session_id: null });

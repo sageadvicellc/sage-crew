@@ -39,7 +39,7 @@ describe('generic tier three', () => {
     expect(existsSync(join(t.env.home, '.trellis-crew', 'mailbox'))).toBe(true);
     const team = readTeam(t.env);
     if (!team.ok || !team.record) throw new Error('no team');
-    expect(team.record.sessions).toHaveLength(7);
+    expect(team.record.sessions).toHaveLength(6);
     for (const entry of team.record.sessions) expect(entry).toMatchObject({ pid: null, session_id: null });
   });
 

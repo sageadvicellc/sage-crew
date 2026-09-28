@@ -48,7 +48,6 @@ async function dispatch(command: Command, deps: CliDeps): Promise<number> {
           env: deps.env,
           ...(command.roles === undefined ? {} : { roles: command.roles }),
           ...(command.workers === undefined ? {} : { workers: command.workers }),
-          mergeReporters: command.mergeReporters,
         },
         deps,
       );
@@ -64,7 +63,6 @@ async function dispatch(command: Command, deps: CliDeps): Promise<number> {
         file: loaded.file,
         ...(loaded.sha256 === null ? {} : { sha256: loaded.sha256 }),
         ...(command.workers === undefined ? {} : { workers: command.workers }),
-        ...(command.mergeReporters ? { merge_reporters: true } : {}),
       };
       return (deps.startTeam ?? launchTeam)(loaded.config, deps, source);
     }

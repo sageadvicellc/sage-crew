@@ -90,7 +90,6 @@ export async function runRespawn(options: RespawnOptions, deps: CliDeps): Promis
       env: deps.env,
       ...(source.file === null ? {} : { roles: source.file }),
       ...(source.workers === undefined ? {} : { workers: source.workers }),
-      ...(source.merge_reporters ? { mergeReporters: true } : {}),
     },
     deps,
   );

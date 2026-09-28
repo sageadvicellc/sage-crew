@@ -5,7 +5,7 @@ describe('args', () => {
   it('parses start with its flags', () => {
     expect(parseCommand(['start', '--workers', '5', '--roles', 'team.yml'])).toEqual({
       ok: true,
-      command: { name: 'start', workers: 5, roles: 'team.yml', mergeReporters: false, yes: false },
+      command: { name: 'start', workers: 5, roles: 'team.yml', yes: false },
     });
   });
 
@@ -17,7 +17,7 @@ describe('args', () => {
   it('treats a leading --roles as start', () => {
     expect(parseCommand(['--roles', 'team.yml'])).toEqual({
       ok: true,
-      command: { name: 'start', roles: 'team.yml', mergeReporters: false, yes: false },
+      command: { name: 'start', roles: 'team.yml', yes: false },
     });
   });
 

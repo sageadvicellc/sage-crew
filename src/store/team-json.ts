@@ -24,7 +24,6 @@ export interface TeamSource {
   /** The SHA-256 of the roles file the operator confirmed, so respawn can tell when it changed. */
   sha256?: string;
   workers?: number;
-  merge_reporters?: boolean;
 }
 
 /** The team the CLI started, read by status, stop, and respawn. */
@@ -56,8 +55,7 @@ function isSource(value: unknown): value is TeamSource {
   return (
     (source.file === null || typeof source.file === 'string') &&
     (source.sha256 === undefined || (typeof source.sha256 === 'string' && /^[0-9a-f]{64}$/.test(source.sha256))) &&
-    (source.workers === undefined || isPid(source.workers)) &&
-    (source.merge_reporters === undefined || typeof source.merge_reporters === 'boolean')
+    (source.workers === undefined || isPid(source.workers))
   );
 }
 

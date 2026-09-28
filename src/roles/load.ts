@@ -15,8 +15,6 @@ export interface LoadOptions {
   roles?: string;
   /** The --workers value. */
   workers?: number;
-  /** The --merge-reporters flag. */
-  mergeReporters?: boolean;
   /** The chosen harness, whose bounds apply. */
   harness?: HarnessId;
 }
@@ -42,19 +40,13 @@ export function loadTeam(options: LoadOptions): LoadResult {
   if (file === undefined) {
     return {
       ok: true,
-      config: defaultTeam({
-        ...(options.workers === undefined ? {} : { workers: options.workers }),
-        mergeReporters: options.mergeReporters === true,
-      }),
+      config: defaultTeam(options.workers === undefined ? {} : { workers: options.workers }),
       source: 'the default team',
       file: null,
       sha256: null,
     };
   }
 
-  if (options.mergeReporters) {
-    return failure(`${file}: --merge-reporters applies to the default team only. Join the sessions in the roles file instead.`);
-  }
   let text: string;
   try {
     text = readFileSync(file, 'utf8');

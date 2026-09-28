@@ -198,7 +198,11 @@ function checkSession(c: Checker, node: unknown, harness: HarnessId | undefined)
 
   const role = scalarString(pairs.role);
   if (role === undefined || !(ROLES as readonly string[]).includes(role)) {
-    c.fail(valueNode(pairs.role) ?? keyNode(pairs.role), `${label}: role must be one of ${ROLES.join(', ')}`, at);
+    const message =
+      role === undefined
+        ? `${label}: role must be one of ${ROLES.join(', ')}`
+        : `${label}: role ${JSON.stringify(printable(role))} is not a role in this build. Use one of ${ROLES.join(', ')}`;
+    c.fail(valueNode(pairs.role) ?? keyNode(pairs.role), message, at);
     valid = false;
   }
 

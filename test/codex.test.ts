@@ -38,7 +38,7 @@ describe('Codex CLI', () => {
     if (!team.ok || !team.record) throw new Error('no team');
     const supervisor = team.record.supervisor_pid as number;
     expect(t.runner.living.has(supervisor)).toBe(true);
-    expect(team.record.sessions.map((s) => s.name)).toHaveLength(7);
+    expect(team.record.sessions.map((s) => s.name)).toHaveLength(6);
 
     const job = JSON.parse(readFileSync(spawns[0]?.args[1] as string, 'utf8')) as SupervisorJob;
     expect(job.binary).toBe(join(fixtureBin, 'codex'));

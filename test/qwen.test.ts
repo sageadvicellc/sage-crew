@@ -16,7 +16,7 @@ describe('Qwen Code', () => {
     const t = installedOn('qwen-code', 'native');
     expect(await main(['start'], t.deps)).toBe(0);
     const launches = t.runner.calls.filter((c) => c.kind === 'detached');
-    expect(launches).toHaveLength(7);
+    expect(launches).toHaveLength(6);
     for (const call of launches) {
       expect(call.command).toBe(qwen);
       expect(call.args).toHaveLength(2);

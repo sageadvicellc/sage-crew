@@ -131,8 +131,8 @@ untouched and gives each role its own context window.
 
 How capacity scales: the cap is per session, so every worker the CLI
 starts brings its own 20 concurrent subagents. One chat holds 20 in
-flight. The default team, three workers plus four reporters, holds up to
-140, and each worker's subagents draw on that worker's context, not on
+flight. The default team, three workers plus three reporters, holds up
+to 120, and each worker's subagents draw on that worker's context, not on
 the lead's. Adding a worker adds a full cap, and `--workers N` is the
 one setting a reader changes to scale. No other harness documents a
 comparable cap, so the same arithmetic holds only for Claude Code until
@@ -234,7 +234,7 @@ gets the same warning as at `start`.
 
 ## 3. The default team
 
-Without a roles file, `trellis-crew start` creates four reporter sessions
+Without a roles file, `trellis-crew start` creates three reporter sessions
 and three workers. A roles file is `./sagespec.yml` in the current folder,
 or the file named by `--roles`. `--workers N` changes the count.
 
@@ -243,12 +243,10 @@ or the file named by `--roles`. `--workers N` changes the count.
 | `personal-assistant` | reporting chain | the operator | `300k` | carries one line per decision to the operator and takes every report |
 | `main` | lead | `personal-assistant` | `600k` | holds the work, owns the workers, sends hand-offs by name |
 | `benchmark` | auditor | `personal-assistant` | `600k` | reads each session's job record on a clock, writes one log line per check |
-| `research` | researcher | `personal-assistant` | `600k` | answers one cited question at a time |
 | `worker-1` to `worker-3` | standby | `main` | `400k` | takes a hand-off, reports done or idle, runs up to 20 subagents of its own |
 
-`benchmark` and `research` start as two sessions; `--merge-reporters`
-joins them into one named `benchmark-research`, with `600k`. A worker
-that `--workers N` adds gets `400k`.
+A worker that `--workers N` adds gets `400k`. The default team has no
+researcher, so the CLI has no `--merge-reporters` flag.
 
 The default team sets no `model` and no `effort`, so each session uses
 the harness's own default. Model names change over time, and a published
@@ -257,8 +255,8 @@ default would go stale with them.
 ### The reporting chain
 
 Every message that needs the operator's own answer flows up one edge at a
-time: a worker reports to `main`, `main`, `benchmark`, and `research`
-report to `personal-assistant`, and `personal-assistant` writes one line
+time: a worker reports to `main`, `main` and `benchmark` report to
+`personal-assistant`, and `personal-assistant` writes one line
 to the operator. No session skips a level. A reply from the operator flows
 back down the same edges. A relayed reply never counts as the operator's
 own approval inside another session's permission layer; an irreversible
@@ -285,8 +283,6 @@ message each:
 3. `benchmark` to `personal-assistant`: "Auditor clock started at
    <time>, interval <clock>. First check at <time>."
 
-`research` sends nothing at kickoff; it waits for a question.
-
 ### Task profiles
 
 A running session cannot change a peer's model; Claude Code documents no
@@ -310,14 +306,6 @@ definition takes `model` and `effort` in its frontmatter.
 The hand-off contract carries the profile as an optional fourth part,
 after the unit, the done signal, and where the result will live. The
 `department-handoff-contract` skill states it.
-
-### The researcher
-
-The `research` session runs the `department-researcher` skill. It takes
-one question at a time from the reporting chain or the lead, claims it
-by name, answers it from sources it cites with a retrieval date, writes
-a figure it cannot find as missing, and reports the finished document's
-location in one line.
 
 ### The audit log line
 
@@ -353,7 +341,7 @@ default team.
 | `mailbox` | top | no | folder for the mailbox transports |
 | `operator` | top | no | how kickoff messages name the person |
 | `sessions[].name` | session | yes | the session's address; lowercase letters, digits, and hyphens, starting with a letter |
-| `sessions[].role` | session | yes | `lead`, `standby`, `auditor`, `researcher`, `reporting-chain` |
+| `sessions[].role` | session | yes | `lead`, `standby`, `auditor`, `reporting-chain` |
 | `sessions[].reports_to` | session | yes | a session name or `operator` |
 | `sessions[].workers` | session | lead only | the names this lead owns |
 | `sessions[].clock` | session | auditor only | check interval, such as `30m` |
@@ -491,6 +479,8 @@ decision numbers.
   `--roles <file>`. The install file is `~/.trellis-crew/install.yml`.
   Applied in the command list and sections 1, 3, 4, and 5, and in
   `sagespec.example.yml`.
+- 2026-09-28: the maintainer's decision 4B removed the `researcher` role
+  and the `research` session from the CLI.
 
 ## Gaps
 

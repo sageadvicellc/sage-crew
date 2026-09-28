@@ -60,18 +60,6 @@ sessions:
       Report a finding to the reporting chain; never act on a decision
       another session relayed.
 
-  - name: research
-    role: researcher
-    reports_to: personal-assistant
-    autocompact: 600k        # auto, or a token count
-    # model: <model>         # unset: the harness default
-    # effort: <level>        # unset: the harness default
-    kickoff: |
-      You are research. Take one question at a time from the reporting
-      chain or the lead, answer it from sources you can cite with a date,
-      and write a missing figure down as missing. Report the finished
-      document's location in one line.
-
   - name: worker-1
     role: standby
     reports_to: main

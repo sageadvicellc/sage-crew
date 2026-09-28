@@ -16,7 +16,6 @@ const ROLE_LABELS: Record<Role, string> = {
   lead: 'the lead',
   standby: 'a worker',
   auditor: 'the auditor',
-  researcher: 'the researcher',
   'reporting-chain': 'the reporting chain',
 };
 
@@ -67,8 +66,6 @@ function startUpMessage(session: Session, ready: string): string {
       return `Start-up message: ${ready}, send each of your workers (${(session.workers ?? []).join(', ')}) the hand-off contract's three parts for the first unit of work, or "${LEAD_NO_WORK}"`;
     case 'auditor':
       return `Start-up message: ${ready}, send this to ${session.reports_to}: "Auditor clock started at <time>, interval ${session.clock ?? '<clock>'}. First check at <time>." Read the clock for each time.`;
-    case 'researcher':
-      return 'Start-up message: none. Send nothing at kickoff, and wait for a question.';
     case 'standby':
       return 'Start-up message: none. Wait for a hand-off addressed to you by name.';
   }

@@ -85,8 +85,8 @@ skips the question.
    flag.
 
 `trellis-crew start` also takes `--workers N`, which sets the number of
-workers, and `--merge-reporters`, which joins the default team's auditor
-and researcher into one session.
+workers. The default team runs a reporting chain, a lead, an auditor,
+and the workers. It has no researcher.
 
 To restart one session with new settings, run
 `trellis-crew respawn <name>`. It takes `--model`, `--effort`, and
