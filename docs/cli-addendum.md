@@ -23,6 +23,8 @@ sage-crew update             # update the CLI and the plugin
 sage-crew start [--workers N] [--roles roles.yml]   # start the team
 sage-crew status             # list the team's sessions and their state
 sage-crew stop               # stop every session the CLI started
+sage-crew respawn <name> [--model M] [--effort E] [--autocompact N]
+                             # restart one session with new launch flags
 sage-crew --roles roles.yml  # shorthand for start with a roles file
 ```
 
@@ -80,6 +82,14 @@ the process id, the session name, and the harness's own session id in
 first prompt. `sage-crew status` reads that file. `sage-crew stop` ends
 each process it started and nothing else.
 
+Each session's launch flags come from its `autocompact`, `model`, and
+`effort` fields in the roles file (section 4). A field that the harness
+has no matching flag for is ignored: the CLI prints one warning per
+ignored field, names the session and the field, and starts the session
+anyway. This addendum verifies the three flags on Claude Code only. On
+every other harness the CLI treats all three as having no matching flag
+until a build verifies one against the vendor's documentation.
+
 ### Claude Code, tier one
 
 Claude Code documents a background mode: `claude --bg "<prompt>"` starts a
@@ -89,8 +99,15 @@ changes it later. `--bg` cannot be combined with `-p`. The CLI starts each
 session as:
 
 ```
-claude --bg --name main "<kickoff message>"
+claude --bg --name main --autocompact 600k [--model <model>] [--effort <level>] "<kickoff message>"
 ```
+
+`--autocompact <auto|tokens>` sets the session's auto-compact window at
+launch, as `auto` or a token count from 100k to 1M, and leaves the
+reader's saved settings unchanged. `--model <model>` takes an alias or a
+full model name. `--effort <level>` takes `low`, `medium`, `high`,
+`xhigh`, or `max`. The CLI adds `--model` and `--effort` only when the
+session's roles-file entry sets them.
 
 Peer messaging is built in. A session lists its peers with the
 `ListAgents` tool and sends plain text to one by name with `SendMessage`.
@@ -162,6 +179,12 @@ harness's MCP client configuration in `~/.codex/config.toml`. Each session
 polls the mailbox on its own schedule, because Codex has no open channel
 to wait on.
 
+The supervisor is a detached process. `sage-crew start` launches it and
+returns at once, as Claude Code's `--bg` does. The supervisor starts each
+`codex exec` process and keeps it alive. `team.json` records the
+supervisor's process id and each child's. `sage-crew stop` ends the
+supervisor and its children.
+
 ### Amp, tier three
 
 Amp documents `amp -ox "<prompt>"` to start a thread that runs on the
@@ -173,6 +196,11 @@ already-running threads to discover each other is documented. The CLI
 starts each session as a titled thread and uses the mailbox transport,
 where every thread reads and writes the shared inbox.
 
+An Amp thread runs on the vendor's servers, so the CLI holds no local
+process for it, and no command to stop a thread is documented.
+`sage-crew stop` leaves each Amp thread running. For each one, it prints
+the thread id and a line that says the thread still runs.
+
 ### Every other tier-three harness
 
 The CLI starts one process per session with the harness's headless
@@ -181,21 +209,38 @@ at the mailbox. With `--transport file`, each session reads and writes its
 own file in the mailbox folder and sees a new message the next time it
 opens the file.
 
+### Respawn
+
+`sage-crew respawn <name>` stops one session the CLI started and starts
+it again under the same name, with the flags given: `--model`,
+`--effort`, or `--autocompact`. A flag that is not given keeps the value
+from the roles file. The new session gets its kickoff message again and
+starts with an empty context, so the lead runs `respawn` only between
+units, after the worker reports done or idle. `team.json` records the new
+process id and session id. The new flags last until the next `respawn` or
+`stop`; the roles file does not change. A flag the harness cannot take
+gets the same warning as at `start`.
+
 ## 3. The default team
 
 Without a roles file, `sage-crew start` creates four reporter sessions
 and three workers. `--workers N` changes the count.
 
-| Session | Role | Reports to | What it does |
-|---|---|---|---|
-| `personal-assistant` | reporting chain | the operator | carries one line per decision to the operator and takes every report |
-| `main` | lead | `personal-assistant` | holds the work, owns the workers, sends hand-offs by name |
-| `benchmark` | auditor | `personal-assistant` | reads each session's job record on a clock, writes one log line per check |
-| `research` | researcher | `personal-assistant` | answers one cited question at a time |
-| `worker-1` to `worker-3` | standby | `main` | takes a hand-off, reports done or idle, runs up to 20 subagents of its own |
+| Session | Role | Reports to | Autocompact | What it does |
+|---|---|---|---|---|
+| `personal-assistant` | reporting chain | the operator | `300k` | carries one line per decision to the operator and takes every report |
+| `main` | lead | `personal-assistant` | `600k` | holds the work, owns the workers, sends hand-offs by name |
+| `benchmark` | auditor | `personal-assistant` | `600k` | reads each session's job record on a clock, writes one log line per check |
+| `research` | researcher | `personal-assistant` | `600k` | answers one cited question at a time |
+| `worker-1` to `worker-3` | standby | `main` | `400k` | takes a hand-off, reports done or idle, runs up to 20 subagents of its own |
 
 `benchmark` and `research` start as two sessions; `--merge-reporters`
-joins them into one named `benchmark-research`.
+joins them into one named `benchmark-research`, with `600k`. A worker
+that `--workers N` adds gets `400k`.
+
+The default team sets no `model` and no `effort`, so each session uses
+the harness's own default. Model names change over time, and a published
+default would go stale with them.
 
 ### The reporting chain
 
@@ -209,7 +254,14 @@ step is confirmed by the session that would take it.
 
 ### Kickoff messages
 
-Each session's first prompt is its kickoff message from the roles file.
+Each session's first prompt is its kickoff message from the roles file,
+followed by a start-up block that the CLI generates. The CLI adds the
+block for every roles file, the default team's and the reader's own, so
+the reporting chain starts the same way on every team. The block holds
+the session's capacity line on Claude Code (a worker may run up to 20
+subagents at once; a lead may run its worker count times 20) and the
+start-up message that session sends, listed below.
+
 Once every session appears in the peer list, the three reporters send one
 message each:
 
@@ -222,6 +274,26 @@ message each:
    <time>, interval <clock>. First check at <time>."
 
 `research` sends nothing at kickoff; it waits for a question.
+
+### Task profiles
+
+A running session cannot change a peer's model; Claude Code documents no
+message or setting for that. The lead therefore sets the model and effort
+for a unit of work in one of two ways.
+
+1. A task profile, the usual way. The roles file's top-level
+   `task_profiles` map names each profile's `model` and `effort`. The
+   lead names a profile in the hand-off. The worker runs that unit
+   through subagents with the profile's model and effort, and keeps its
+   own model and its context. A hand-off that names no profile runs on
+   the worker's own `model` and `effort` from the roles file. The lead
+   picks the profile; no rule table picks one for it.
+2. A respawn, for a unit that must run on the worker's own model. The
+   lead runs `sage-crew respawn <name> --model <m> --effort <e>` between
+   units, as in section 2. The worker loses its context.
+
+On Claude Code, a subagent takes `model` on each call, and a subagent
+definition takes `model` and `effort` in its frontmatter.
 
 ## 4. The roles file
 
@@ -241,11 +313,25 @@ message each:
 | `sessions[].workers` | session | lead only | the names this lead owns |
 | `sessions[].clock` | session | auditor only | check interval, such as `30m` |
 | `sessions[].kickoff` | session | yes | the first prompt, multi-line |
+| `sessions[].autocompact` | session | no | `auto` or a token count such as `400k`; the auto-compact window at launch |
+| `sessions[].model` | session | no | the session's model; unset means the harness default |
+| `sessions[].effort` | session | no | the session's effort level; unset means the harness default |
+| `task_profiles` | top | no | a map from a profile name to its `model` and `effort`, named by the lead in a hand-off |
 
 Rules the CLI checks before it starts anything: every `reports_to` names
 a session in the file or `operator`; exactly one session has the
 `reporting-chain` role; every worker is owned by exactly one lead; no name
-repeats. A failed check prints the line and starts nothing.
+repeats; every `autocompact` is `auto` or a token count; every task
+profile sets `model`, `effort`, or both. On Claude Code, an `autocompact`
+count outside 100k to 1M fails, and so does an `effort` other than `low`,
+`medium`, `high`, `xhigh`, or `max`. A failed check prints the line and
+starts nothing.
+
+`--workers N` together with `--roles` overrides the file. The CLI
+replaces the file's `standby` sessions with N generated workers, named
+`worker-1` to `worker-N`, each owned by the file's lead and given `400k`.
+A file with more than one lead fails with exit code 2, because the CLI
+cannot tell which lead owns the new workers.
 
 ## 5. Install and update
 
@@ -303,6 +389,36 @@ request that carries this document.
    gates. Nothing is published by the pull request that carries this
    document.
 
+### Implementation plan decisions
+
+The maintainer answered these on 2026-09-28, on issue 4 of this
+repository, the CLI's implementation plan. The numbers are the issue's
+decision numbers.
+
+- Decision 2: Who keeps `codex exec` alive. Answer A: a detached supervisor.
+  `start` returns at once, and `stop` ends the supervisor and its
+  children. Applied in section 2.
+- Decision 3: The researcher skill and the audit-log fields. Answer A: add a
+  `department-researcher` skill and the audit-log field order to the
+  specification first. Build steps 1 to 7 of the plan do not wait on
+  them; the kickoff and auditor steps do.
+- Decision 4: The start-up block on a custom roles file. Answer A: the CLI adds it
+  to every roles file. Applied in section 3.
+- Decision 5: `--workers` together with `--roles`. Answer B: `--workers N`
+  overrides the file's `standby` sessions. Applied in section 4.
+- Decision 7: What `stop` does to an Amp thread. Answer B: it leaves the thread
+  running and prints its id. Applied in section 2.
+- Decision 8: The minimum Node version. Answer B: Node 24, `engines.node >=24`.
+- Decision 9: How the lead sets a worker's model for one task. Answer C: task
+  profiles by default, and `sage-crew respawn` for a unit that must run
+  on the worker's own model. Applied in sections 2, 3, and 4.
+- Decision 10: Who picks the model and effort for a task. Answer A: the lead names
+  a profile in the hand-off. A hand-off without one uses the worker's
+  own `model` and `effort`. Applied in section 3.
+- Decision 11: Model and effort in the default team. Answer A: none ship. The
+  fields stay unset, and `roles.example.yml` shows them commented out.
+  Applied in sections 3 and 4.
+
 ## Gaps
 
 - Codex CLI documents no background flag, no session-name flag, and no
@@ -318,18 +434,32 @@ request that carries this document.
   subagents or sessions.
 - No measurement exists yet for how many sessions one machine runs before
   the harness or the model provider rate-limits them.
+- The `department-researcher` skill and the audit-log field order are not
+  written yet (decision 3).
+- `--autocompact`, `--model`, and `--effort` are verified on Claude Code
+  only. No other harness's matching flags were checked.
+- Claude Code documents no per-call `effort` for a subagent, so a task
+  profile's `effort` reaches a subagent only through a subagent
+  definition's frontmatter.
+- The hand-off contract skill does not yet name a task profile as part
+  of a hand-off.
 
 ## Sources
 
 1. Claude Code CLI reference and headless mode, `--bg`, `--name`, `-p`,
-   `--bare`: https://code.claude.com/docs/en/cli-reference and
-   https://code.claude.com/docs/en/headless, retrieved 2026-09-28.
+   `--bare`, `--autocompact`, `--model`, `--effort`:
+   https://code.claude.com/docs/en/cli-reference and
+   https://code.claude.com/docs/en/headless, retrieved 2026-09-28. The
+   three launch flags and their values were also read from
+   `claude --help` on version 2.1.284, 2026-09-28.
 2. Claude Code cross-session messaging, `ListAgents`, `SendMessage`, the
    per-session socket, `crossSessionInbound`, the 50-message queue, the
    container limit: https://code.claude.com/docs/en/cross-session-messaging,
    retrieved 2026-09-28.
-3. Claude Code subagent cap, 20 by default:
-   https://code.claude.com/docs/en/sub-agents, retrieved 2026-09-28.
+3. Claude Code subagent cap, 20 by default, and a subagent's `model` and
+   `effort`: https://code.claude.com/docs/en/sub-agents, retrieved
+   2026-09-28. No way for one session to change a peer's model:
+   https://code.claude.com/docs/en/agent-teams, retrieved 2026-09-28.
 4. Claude Code plugin install and update:
    https://code.claude.com/docs/en/plugin-marketplaces and
    https://code.claude.com/docs/en/plugins, retrieved 2026-09-28.
