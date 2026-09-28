@@ -36,8 +36,9 @@ export interface Runner {
 
 /**
  * A process's start time as `ps` reports it. `absent` means `ps` exited 1
- * with no output, which is how it reports no such process. `unknown` is
- * every other failure: the caller must not treat it as absent.
+ * with no output, which is how it reports no such process, and signal 0
+ * confirms that no such pid exists. `unknown` is every other failure: the
+ * caller must not treat it as absent.
  */
 export type ProcessStart =
   | { status: 'running'; started: string }
@@ -70,9 +71,23 @@ export function processStartTime(pid: number, options: ProcessStartOptions = {})
   }
   const text = (result.stdout ?? '').trim();
   if (result.status === 0 && text !== '') return { status: 'running', started: text };
-  if (result.status === 1 && text === '') return { status: 'absent' };
+  if (result.status === 1 && text === '') {
+    // A ps that rejects -p, as busybox ps does, also exits 1 with no
+    // output. So a pid that still exists is unknown, not absent.
+    if (processExists(pid)) return { status: 'unknown', reason: `ps reported no such process, but pid ${pid} exists` };
+    return { status: 'absent' };
+  }
   const exit = result.status === null ? `signal ${String(result.signal)}` : `exit code ${result.status}`;
   return { status: 'unknown', reason: `ps failed: ${exit}${text === '' ? ', no output' : ', unexpected output'}` };
+}
+
+/** True when a process with this id exists, checked with signal 0. EPERM means it exists but belongs to another user. */
+export function processExists(pid: number): boolean {
+  try {
+    return process.kill(pid, 0);
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
 }
 
 /** The recorded start time, or undefined, from a ProcessStart. */
@@ -182,14 +197,7 @@ export function createRunner(): Runner {
       }
     },
 
-    alive(pid) {
-      try {
-        return process.kill(pid, 0);
-      } catch (error) {
-        // EPERM: the process exists but belongs to another user.
-        return error instanceof Error && 'code' in error && error.code === 'EPERM';
-      }
-    },
+    alive: processExists,
 
     startTime: processStartTime,
   };

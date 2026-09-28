@@ -21,7 +21,14 @@ describe('process start time', () => {
       chmodSync(path, 0o755);
       return path;
     };
-    expect(processStartTime(1234, { ps: stub('gone', 'exit 1') })).toEqual({ status: 'absent' });
+    const gonePid = 2 ** 22 + 12345;
+    expect(processStartTime(gonePid, { ps: stub('gone', 'exit 1') })).toEqual({ status: 'absent' });
+    // A ps that rejects -p, as busybox ps does, can exit 1 with no output
+    // for a live pid. A pid that still exists is then unknown, not absent.
+    expect(processStartTime(process.pid, { ps: stub('rejects-p', 'exit 1') })).toMatchObject({
+      status: 'unknown',
+      reason: expect.stringMatching(/ps reported no such process, but pid \d+ exists/),
+    });
     expect(processStartTime(1234, { ps: stub('odd', 'exit 2') })).toMatchObject({ status: 'unknown', reason: expect.stringMatching(/exit code 2/) });
     expect(processStartTime(1234, { ps: stub('noisy', 'echo junk; exit 1') })).toMatchObject({ status: 'unknown' });
     expect(processStartTime(1234, { ps: stub('empty', 'exit 0') })).toMatchObject({ status: 'unknown' });
