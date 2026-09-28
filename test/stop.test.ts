@@ -119,6 +119,44 @@ describe('stop', () => {
     expect(t.err.text()).toMatch(/main: cannot tell whether pid 4101 is the process the CLI started \(ps failed: exit code 2\)/);
     expect(existsSync(teamJsonPath(t.env))).toBe(true);
     expect(t.err.text()).toMatch(/Kept the team record/);
+    // Only the entry that was not stopped stays, so a second stop never
+    // signals the pid that was already ended.
+    const team = readTeam(t.env);
+    if (!team.ok || !team.record) throw new Error('no team');
+    expect(team.record.sessions).toEqual([{ name: 'main', pid: 4101, session_id: null, started: 'start-main' }]);
+  });
+
+  it('after a partial stop, the supervisor stays in the record only when it was kept', async () => {
+    const t = claudeInstalled();
+    for (const pid of [4100, 4101, 4102]) t.runner.living.add(pid);
+    t.runner.unknown.set(4100, 'ps failed: exit code 2');
+    t.runner.starts.set(4101, 'start-main');
+    t.runner.unknown.set(4102, 'ps failed: exit code 2');
+    writeTeam(t.env, {
+      version: 1,
+      harness: 'codex',
+      supervisor_pid: 4100,
+      supervisor_started: 'start-supervisor',
+      sessions: [
+        { name: 'main', pid: 4101, session_id: null, started: 'start-main' },
+        { name: 'worker-1', pid: 4102, session_id: null, started: 'start-worker' },
+        { name: 'remote', pid: null, session_id: 'remote-1' },
+      ],
+    });
+    expect(await main(['stop'], t.deps)).toBe(1);
+    const kept = readTeam(t.env);
+    if (!kept.ok || !kept.record) throw new Error('no team');
+    expect(kept.record).toMatchObject({ supervisor_pid: 4100, supervisor_started: 'start-supervisor' });
+    expect(kept.record.sessions.map((s) => s.name)).toEqual(['worker-1']);
+
+    t.runner.unknown.delete(4100);
+    t.runner.starts.set(4100, 'start-supervisor');
+    expect(await main(['stop'], t.deps)).toBe(1);
+    const again = readTeam(t.env);
+    if (!again.ok || !again.record) throw new Error('no team');
+    expect(again.record.supervisor_pid).toBeUndefined();
+    expect(again.record.supervisor_started).toBeUndefined();
+    expect(again.record.sessions.map((s) => s.name)).toEqual(['worker-1']);
   });
 
   it('start records each detached process start time, and the team record keeps it', async () => {

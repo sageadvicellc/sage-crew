@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import { adapterFor } from '../adapters/index.ts';
 import { EXIT_OK, EXIT_RUNTIME, type CliDeps } from '../deps.ts';
 import { terminalAsk } from '../detect/confirm.ts';
-import { readTeam, teamJsonPath, type TeamEntry } from '../store/team-json.ts';
+import { readTeam, teamJsonPath, writeTeam, type TeamEntry, type TeamRecord } from '../store/team-json.ts';
 
 /** What stopping one recorded process did. */
 export interface StopOutcome {
@@ -104,19 +104,34 @@ export async function runStop(options: StopPidOptions, deps: CliDeps): Promise<n
     return EXIT_OK;
   }
   const { record } = team;
-  let kept = 0;
-  const stop = async (label: string, pid: number, started: string | undefined): Promise<void> => {
-    const outcome = await stopPid(label, pid, started, deps, options);
+  let supervisorKept = false;
+  const keptSessions: TeamEntry[] = [];
+  if (record.supervisor_pid !== undefined) {
+    const outcome = await stopPid('the supervisor', record.supervisor_pid, record.supervisor_started, deps, options);
     printStop(outcome, deps);
-    if (outcome.kept) kept += 1;
-  };
-  if (record.supervisor_pid !== undefined) await stop('the supervisor', record.supervisor_pid, record.supervisor_started);
-  for (const entry of record.sessions) {
-    if (entry.pid === null) deps.out(noProcessLine(record.harness, entry, deps));
-    else await stop(entry.name, entry.pid, entry.started);
+    supervisorKept = outcome.kept;
   }
+  for (const entry of record.sessions) {
+    if (entry.pid === null) {
+      deps.out(noProcessLine(record.harness, entry, deps));
+      continue;
+    }
+    const outcome = await stopPid(entry.name, entry.pid, entry.started, deps, options);
+    printStop(outcome, deps);
+    if (outcome.kept) keptSessions.push(entry);
+  }
+  const kept = keptSessions.length + (supervisorKept ? 1 : 0);
   if (kept > 0) {
-    deps.err(`Kept the team record ${teamJsonPath(deps.env)}, because ${kept} process(es) could not be checked. Run trellis-crew stop again.`);
+    // Only the processes that were not stopped stay in the record, so the
+    // next stop never signals a pid that this run already ended.
+    const { supervisor_pid, supervisor_started, ...rest } = record;
+    const remaining: TeamRecord = { ...rest, sessions: keptSessions };
+    if (supervisorKept && supervisor_pid !== undefined) {
+      remaining.supervisor_pid = supervisor_pid;
+      if (supervisor_started !== undefined) remaining.supervisor_started = supervisor_started;
+    }
+    writeTeam(deps.env, remaining);
+    deps.err(`Kept the team record ${teamJsonPath(deps.env)} with the ${kept} process(es) that could not be checked. Run trellis-crew stop again.`);
     return EXIT_RUNTIME;
   }
   rmSync(teamJsonPath(deps.env), { force: true });
