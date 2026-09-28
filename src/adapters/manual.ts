@@ -1,3 +1,4 @@
+import { printable } from '../printable.ts';
 import type { TeamEntry } from '../store/team-json.ts';
 import type { AdapterContext, LaunchOutcome } from './types.ts';
 
@@ -17,7 +18,7 @@ export function manualLaunch(
   ctx.out(`Not started: ${how.reason}`);
   if (how.command !== undefined) ctx.out(`Start it in its own terminal with: ${how.command}`);
   ctx.out(`Then send this kickoff as its first message:`);
-  for (const line of kickoff.trimEnd().split('\n')) ctx.out(line);
+  for (const line of kickoff.trimEnd().split('\n')) ctx.out(printable(line));
   ctx.out(`--- end of ${name} ---`);
   return { ok: true, entry: { name, pid: null, session_id: null } };
 }

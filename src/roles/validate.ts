@@ -24,6 +24,7 @@ import {
   type TaskProfile,
   type TransportSetting,
 } from './schema.ts';
+import { hasControlCharacter, printable } from '../printable.ts';
 
 export interface RolesError {
   /** The 1-based line in the roles file. */
@@ -105,6 +106,10 @@ function checkOptionalString(c: Checker, map: YAMLMap, key: string, fallback: nu
   const value = scalarString(pair);
   if (value === undefined || value.trim() === '') {
     c.fail(keyNode(pair), `${key} must be a non-empty text value`, fallback);
+    return undefined;
+  }
+  if (hasControlCharacter(value)) {
+    c.fail(keyNode(pair), `${key} must not hold a control character`, fallback);
     return undefined;
   }
   return value;
@@ -200,11 +205,17 @@ function checkSession(c: Checker, node: unknown, harness: HarnessId | undefined)
   if (reportsTo === undefined) {
     c.fail(keyNode(pairs.reports_to), `${label}: reports_to must name a session or ${OPERATOR}`, at);
     valid = false;
+  } else if (hasControlCharacter(reportsTo)) {
+    c.fail(keyNode(pairs.reports_to), `${label}: reports_to must not hold a control character`, at);
+    valid = false;
   }
 
   const kickoff = scalarString(pairs.kickoff);
   if (kickoff === undefined || kickoff.trim() === '') {
     c.fail(keyNode(pairs.kickoff), `${label}: kickoff must be a non-empty message`, at);
+    valid = false;
+  } else if (hasControlCharacter(kickoff)) {
+    c.fail(keyNode(pairs.kickoff), `${label}: kickoff must not hold a control character other than newline and tab`, at);
     valid = false;
   } else if (kickoffLooksLikeOption(kickoff)) {
     c.fail(keyNode(pairs.kickoff), `${label}: kickoff must not start with "-", which a harness could read as an option`, at);
@@ -410,9 +421,10 @@ export function formatRolesErrors(errors: readonly RolesError[], text: string, f
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
   for (const error of errors) {
-    out.push(`${file}:${error.line}: ${error.message}`);
+    // A message or line can quote a control character from the file, so each is escaped.
+    out.push(printable(`${file}:${error.line}: ${error.message}`));
     const source = lines[error.line - 1];
-    if (source !== undefined) out.push(`  ${String(error.line).padStart(4)} | ${source}`);
+    if (source !== undefined) out.push(printable(`  ${String(error.line).padStart(4)} | ${source}`));
   }
   return out;
 }

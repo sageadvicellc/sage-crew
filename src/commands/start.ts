@@ -4,6 +4,7 @@ import { adapterFor } from '../adapters/index.ts';
 import type { Adapter, AdapterContext, LaunchItem, LaunchValues } from '../adapters/types.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from '../deps.ts';
 import { terminalAsk } from '../detect/confirm.ts';
+import { printable } from '../printable.ts';
 import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { composeKickoff } from '../kickoff/compose.ts';
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
@@ -33,10 +34,11 @@ export function loadForHarness(options: Omit<LoadOptions, 'harness'>, deps: CliD
  * it refuses. Returns an exit code to stop with, or undefined to go on.
  */
 export async function confirmFoundRoles(file: string, config: RolesConfig, yes: boolean, deps: CliDeps): Promise<number | undefined> {
-  deps.out(`Roles file found in this folder: ${file}`);
+  // Every printed value is escaped, so a control character cannot hide text.
+  deps.out(`Roles file found in this folder: ${printable(file)}`);
   for (const session of config.sessions) {
-    deps.out(`${session.name}:`);
-    for (const line of session.kickoff.trimEnd().split('\n')) deps.out(`  ${line}`);
+    deps.out(`${printable(session.name)}:`);
+    for (const line of session.kickoff.trimEnd().split('\n')) deps.out(`  ${printable(line)}`);
   }
   if (yes) return undefined;
   if (!deps.env.stdinIsTTY) {
