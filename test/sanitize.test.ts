@@ -8,7 +8,7 @@ import {
   scanText,
   type FindingClass,
 } from '../src/sanitize/checks.ts';
-import { parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
+import { CANNOT_READ, decodeText, parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
 import { createRunner, type Runner } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
@@ -381,8 +381,13 @@ describe('sanitize run', () => {
     const repo = makeFixtureRepo();
     repo.write('clean.md', 'nothing\n');
     repo.commit('chore: start');
-    const binary = Buffer.alloc(2 * 1024 * 1024, 0x41);
-    for (let i = 0; i < binary.length; i += 97) binary[i] = 0;
+    // Pseudo-random bytes from a fixed seed, as compressed or image data looks.
+    const binary = Buffer.alloc(2 * 1024 * 1024);
+    let seed = 12345;
+    for (let i = 0; i < binary.length; i += 1) {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      binary[i] = seed >>> 16;
+    }
     writeFileSync(join(repo.root, 'big.bin'), binary);
     const wide = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${'plain '.repeat(2000)}see ${fake.macHome}/x\n`, 'utf16le')]);
     writeFileSync(join(repo.root, 'wide.txt'), wide);
@@ -488,6 +493,36 @@ describe('sanitize run', () => {
     writeFileSync(join(binary.root, 'image.bin'), Buffer.from([0x89, 0x50, 0x00, 0x00, 0x00, 0x0d, 0xff, 0x00, 0x01]));
     binary.commit('chore: add binary');
     expect((await sanitize(binary.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD')).code).toBe(0);
+  });
+
+  it('UTF-16 with no byte-order mark and mostly non-Latin text is decoded, in both byte orders', async () => {
+    // Mostly CJK, so far fewer than 90% of the characters are ASCII.
+    const text = `${'日本語の文書です。'.repeat(40)}\n\u{1f331} see ${fake.macHome}/x\n`;
+    const le = Buffer.from(text, 'utf16le');
+    const be = Buffer.from(le).swap16();
+    expect(decodeText(le)).toBe(text);
+    expect(decodeText(be)).toBe(text);
+    expect(decodeText(Buffer.concat([le, Buffer.from([0x41])]))).toBe(CANNOT_READ);
+
+    const repo = makeFixtureRepo();
+    writeFileSync(join(repo.root, 'cjk.txt'), le);
+    repo.commit('chore: add file');
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('private-path: cjk.txt:2');
+  });
+
+  it('a binary whose zero bytes all share one parity still counts as binary unless it decodes as valid text', () => {
+    // 16-bit samples: high bytes are zero, but the low bytes hold control codes.
+    const samples = Buffer.alloc(4000);
+    for (let i = 0; i < samples.length; i += 2) samples[i] = i % 31;
+    expect(decodeText(samples)).toBeUndefined();
+    // A lone surrogate is not valid UTF-16.
+    const lone = Buffer.from('日本\n', 'utf16le');
+    const broken = Buffer.concat([lone, Buffer.from([0x00, 0xd8, 0x41, 0x00]), lone]);
+    expect(decodeText(broken)).toBeUndefined();
+    // Zero bytes in both parities: binary.
+    expect(decodeText(Buffer.from([0x89, 0x50, 0x00, 0x00, 0x00, 0x0d, 0xff, 0x00]))).toBeUndefined();
   });
 
   it('a tracked file it cannot read fails the run and is named', async () => {

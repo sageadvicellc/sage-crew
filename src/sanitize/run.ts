@@ -133,7 +133,13 @@ export function decodeText(buffer: Buffer): string | undefined | typeof CANNOT_R
   return (order === 'be' ? body.swap16() : body).toString('utf16le');
 }
 
-/** Names UTF-16 text with no byte-order mark: zero bytes in all odd places (LE) or all even places (BE). */
+/**
+ * Names UTF-16 text with no byte-order mark, or returns undefined for a
+ * binary. Mostly-ASCII UTF-16 has zero bytes in all odd places (LE) or
+ * all even places (BE). Other UTF-16, such as CJK text, has fewer zero
+ * bytes, so the parity with more zero bytes picks the byte order, and the
+ * sample must then decode as valid text.
+ */
 function utf16Order(sample: Buffer): 'le' | 'be' | undefined {
   if (sample.length < 2) return undefined;
   let evenZeros = 0;
@@ -147,7 +153,31 @@ function utf16Order(sample: Buffer): 'le' | 'be' | undefined {
   const pairs = sample.length / 2;
   if (evenZeros === 0 && oddZeros >= pairs * 0.9) return 'le';
   if (oddZeros === 0 && evenZeros >= pairs * 0.9) return 'be';
-  return undefined;
+  if (oddZeros === evenZeros) return undefined;
+  const order = oddZeros > evenZeros ? 'le' : 'be';
+  return validUtf16(order === 'le' ? sample : Buffer.from(sample).swap16()) ? order : undefined;
+}
+
+/**
+ * True when little-endian UTF-16 code units form valid text: no NUL, no C0
+ * control except tab, newline, form feed, and carriage return, no C1
+ * control, no U+FFFE or U+FFFF, and every surrogate in a valid pair. A
+ * high surrogate may end the sample, because the sample can cut a pair.
+ */
+function validUtf16(units: Buffer): boolean {
+  for (let i = 0; i + 1 < units.length; i += 2) {
+    const unit = units.readUInt16LE(i);
+    if (unit < 0x20 && unit !== 0x09 && unit !== 0x0a && unit !== 0x0c && unit !== 0x0d) return false;
+    if ((unit >= 0x7f && unit <= 0x9f) || unit === 0xfffe || unit === 0xffff) return false;
+    if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (i + 3 >= units.length) return true;
+      const next = units.readUInt16LE(i + 2);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      i += 2;
+    }
+  }
+  return true;
 }
 
 /**
