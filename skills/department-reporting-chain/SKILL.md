@@ -36,6 +36,14 @@ prose above it:
 - Send detail to the item's comments, never into a message.
 - Never post a comment that is only a letter token, such as "1A".
 
+## Scaling advisor
+
+Once an hour, run `sage-crew scale` and carry its one advice row to
+the operator: scale up, scale down, hold, or rebalance, with the reason
+and the projected usage-window share at reset. Never start or stop a
+session on that advice; the operator decides. When the operator is the
+bottleneck, the row is red and names the oldest waiting decision.
+
 ## Briefs
 
 At each scheduled edition time, take the edition file from the auditor,
