@@ -51,12 +51,20 @@ function stop(settingsPath: string, reason: string): InboundResult {
   return { ok: false, code: 1, message: `${settingsPath}: ${reason}. Nothing was changed.` };
 }
 
-function unchangedSince(path: string, text: string): boolean {
+/**
+ * Reads the file again and compares it with the text read first. Returns
+ * undefined when it is unchanged, or the reason to stop: a change, or the
+ * read error with its code.
+ */
+function changeSince(path: string, text: string): string | undefined {
+  let now: string;
   try {
-    return readFileSync(path, 'utf8') === text;
-  } catch {
-    return false;
+    now = readFileSync(path, 'utf8');
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'unknown error';
+    return `cannot read the settings file again before the write (${code})`;
   }
+  return now === text ? undefined : 'the settings file changed while install ran. Run install again';
 }
 
 function indentOf(text: string): string {
@@ -148,9 +156,8 @@ export function setInboundAccept(target: InboundTarget, options: InboundOptions)
   holder[leaf] = INBOUND_ACCEPT;
   // Another writer may have changed the file since it was read. Its change
   // wins: this run stops rather than overwrite it.
-  if (exists && !unchangedSince(writePath, text)) {
-    return stop(settingsPath, 'the settings file changed while install ran. Run install again');
-  }
+  const change = exists ? changeSince(writePath, text) : undefined;
+  if (change !== undefined) return stop(settingsPath, change);
   try {
     write(writePath, `${JSON.stringify(settings, null, indentOf(text))}\n`, mode);
   } catch {

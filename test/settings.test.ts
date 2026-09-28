@@ -152,6 +152,22 @@ describe('settings writer', () => {
     expect(readFileSync(t.path, 'utf8')).toBe('{"theirs": true}\n');
   });
 
+  it.skipIf(process.getuid?.() === 0)('a settings file that cannot be read again before the write names the read error, not a change', () => {
+    const t = setup(ORIGINAL);
+    writeFileSync(t.backup, 'an earlier backup\n');
+    const out = (line: string) => {
+      if (line.startsWith('A backup from today')) chmodSync(t.path, 0o000);
+    };
+    const result = setInboundAccept(t.target, { now: NOW, out });
+    chmodSync(t.path, 0o644);
+    expect(result).toMatchObject({ ok: false, code: 1 });
+    if (!result.ok) {
+      expect(result.message).toMatch(/cannot read the settings file again before the write \(EACCES\)/);
+      expect(result.message).not.toMatch(/changed while/);
+    }
+    expect(readFileSync(t.path, 'utf8')).toBe(ORIGINAL);
+  });
+
   it('31: a missing configuration folder stops and writes nothing', () => {
     const env = makeTestEnv();
     const result = setInboundAccept(claudeInboundTarget(env), { now: NOW, out: () => {} });
