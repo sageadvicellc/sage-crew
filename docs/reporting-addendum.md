@@ -50,8 +50,10 @@ Then only what needs the operator:
   open. The item's body links each decision comment.
 - Each comment ends with a default letter, its posted time in UTC, and
   the timeout: "Default: (a). Posted <date> <time> UTC. Applies after N
-  hours without a reply." The posting session reads the clock before it
-  writes the time.
+  hours without a reply." N is 12 unless the roles file sets another
+  value. The posting session reads the clock before it writes the time.
+- Every decision on one pull request or issue is numbered in one
+  sequence; a later batch continues the count and never restarts at 1.
 - Exempt classes never default, and the comment says "No default":
   irreversible actions, anything that spends money, security findings at
   medium severity or above, publishing, and merges to the main branch.
@@ -102,8 +104,11 @@ number names its source. A number that could not be read is a gap line,
 never a zero.
 
 The `sage-crew brief` and `sage-crew scale` commands are added to the
-CLI addendum's command list. The default edition times and the default timeout hours are open
-choices on the pull request that carries this document.
+CLI addendum's command list. Defaults: editions at 09:00 and 23:00 in
+the machine's local time zone; edition files in `~/.sage-crew/briefs/`,
+beside the CLI's configuration, so nothing touches the repository; a
+decision's default applies after 12 hours. Each is a field in the roles
+file.
 
 ## 7. The hourly scaling advisor
 
@@ -154,14 +159,14 @@ blocked time. A hold with nothing to do is green.
 
 ### Configuration
 
-The roles file carries the thresholds; the defaults are open choices on
-the pull request that carries this document.
+The roles file carries the thresholds. The defaults below are the
+maintainer's answers of 2026-09-28.
 
 ```yaml
 scaling:
   interval: 60m
-  up_below_pct: 60
-  down_above_pct: 90
+  up_below_pct: 70
+  down_above_pct: 80
   backlog_per_lane: 2
   idle_minutes: 30
   operator_share_pct: 50
@@ -169,6 +174,19 @@ scaling:
 
 `sage-crew scale --dry-run` prints the inputs and the rule that fired
 without posting the row.
+
+## Decisions
+
+The maintainer answered all six choices on 2026-09-28, on the pull
+request that carries this document.
+
+1. Default edition times. Answer A: 09:00 and 23:00 local.
+2. Default timeout hours on a decision comment. Answer B: 12 hours.
+3. Default edition folder. Answer B: `~/.sage-crew/briefs/`, beside the
+   CLI's configuration.
+4. Scale-up threshold. Answer C: 70 percent.
+5. Scale-down threshold. Answer B: 80 percent.
+6. Operator-bottleneck share. Answer A: 50 percent.
 
 ## Gaps
 
