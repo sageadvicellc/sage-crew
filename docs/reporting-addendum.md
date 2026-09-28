@@ -101,12 +101,80 @@ closed, spend where a session can read it, and what comes next. Every
 number names its source. A number that could not be read is a gap line,
 never a zero.
 
-The `sage-crew brief` command is added to the CLI addendum's command
-list. The default edition times and the default timeout hours are open
+The `sage-crew brief` and `sage-crew scale` commands are added to the
+CLI addendum's command list. The default edition times and the default timeout hours are open
 choices on the pull request that carries this document.
+
+## 7. The hourly scaling advisor
+
+Once an hour the reporting-chain role runs `sage-crew scale`, which
+prints one advice row in the status table. It never adds or removes a
+session on its own; the operator decides.
+
+### Inputs
+
+| Input | Source |
+|---|---|
+| `window_used_pct` | the harness's usage-window share. On Claude Code the status line's `rate_limits` fields carry the five-hour and seven-day percentages; the CLI reads a log of those values kept by the status-line script, one line per minute |
+| `window_elapsed_pct` | minutes since the window reset, over the window length |
+| per lane, last 60 minutes | working, blocked on the operator, blocked other, idle minutes, from each session's job record |
+| `backlog` | items ready for a worker with no "claimed" reply |
+| `decisions_open` | decision comments waiting, with the oldest age |
+
+`projected_at_reset_pct` = `window_used_pct` divided by
+`window_elapsed_pct`, capped at 100. When the usage share cannot be
+read, the row says so and gives lane advice only.
+
+### Rules, in order
+
+1. **Operator bottleneck.** If blocked-on-operator minutes exceed
+   `operator_share_pct` of all blocked minutes, the advice is **hold**,
+   the reason names the oldest waiting decision, and the row is red:
+   adding a worker adds nothing until the operator replies.
+2. **Scale down.** If `projected_at_reset_pct` exceeds
+   `down_above_pct`, or a lane idled more than `idle_minutes` of the last
+   60 with `backlog` at 0, advise **scale down** and name the lane.
+3. **Rebalance.** If one lead's lanes idle more than `idle_minutes`
+   while another lead's backlog is at least `backlog_per_lane` per lane,
+   advise **rebalance** and name the lane to move.
+4. **Scale up.** If `projected_at_reset_pct` is under `up_below_pct`,
+   no lane idled more than `idle_minutes`, and `backlog` is at least
+   `backlog_per_lane` per lane, advise **scale up** by one worker.
+5. Otherwise **hold**.
+
+### The advice row
+
+| # | Status | Item | Link | Their action |
+|---|---|---|---|---|
+| 1 | 🟡 | scale up: 3 lanes, backlog 7, projected 48% at reset | the advisor's log line | Start worker-4, or reply "hold" |
+
+Every row carries the four numbers it used: projected use at reset,
+backlog, idle minutes on the named lane, and the operator's share of
+blocked time. A hold with nothing to do is green.
+
+### Configuration
+
+The roles file carries the thresholds; the defaults are open choices on
+the pull request that carries this document.
+
+```yaml
+scaling:
+  interval: 60m
+  up_below_pct: 60
+  down_above_pct: 90
+  backlog_per_lane: 2
+  idle_minutes: 30
+  operator_share_pct: 50
+```
+
+`sage-crew scale --dry-run` prints the inputs and the rule that fired
+without posting the row.
 
 ## Gaps
 
+- No usage-window log exists yet on any harness but Claude Code, and the
+  Claude Code log is the operator's own status-line script, not a
+  harness feature.
 - No measurement exists of how much operator time the status table saves
   against prose reports.
 - The edition schema has one real edition behind it; fields may change
