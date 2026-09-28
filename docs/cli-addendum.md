@@ -108,6 +108,15 @@ subagents at 20 per session by default, and every subagent draws on the
 parent's context and usage. A team of separate sessions leaves that cap
 untouched and gives each role its own context window.
 
+How capacity scales: the cap is per session, so every worker the CLI
+starts brings its own 20 concurrent subagents. One chat holds 20 in
+flight. The default team, three workers plus four reporters, holds up to
+140, and each worker's subagents draw on that worker's context, not on
+the lead's. Adding a worker adds a full cap, and `--workers N` is the
+one setting a reader changes to scale. No other harness documents a
+comparable cap, so the same arithmetic holds only for Claude Code until
+a vendor states one.
+
 Kickoff delivery: the kickoff message is the `--bg` prompt itself. A
 second message, from the reporting chain, arrives through `SendMessage`
 once every session is listed by `ListAgents`.
@@ -175,7 +184,7 @@ opens the file.
 ## 3. The default team
 
 Without a roles file, `sage-crew start` creates four reporter sessions
-and N workers.
+and three workers. `--workers N` changes the count.
 
 | Session | Role | Reports to | What it does |
 |---|---|---|---|
@@ -183,11 +192,10 @@ and N workers.
 | `main` | lead | `personal-assistant` | holds the work, owns the workers, sends hand-offs by name |
 | `benchmark` | auditor | `personal-assistant` | reads each session's job record on a clock, writes one log line per check |
 | `research` | researcher | `personal-assistant` | answers one cited question at a time |
-| `worker-1` to `worker-N` | standby | `main` | takes a hand-off, reports done or idle |
+| `worker-1` to `worker-3` | standby | `main` | takes a hand-off, reports done or idle, runs up to 20 subagents of its own |
 
-Whether `benchmark` and `research` start as two sessions or one, and the
-default N, are open choices on the pull request that carries this
-document.
+`benchmark` and `research` start as two sessions; `--merge-reporters`
+joins them into one named `benchmark-research`.
 
 ### The reporting chain
 
@@ -265,9 +273,8 @@ separate marketplace; that was decided in the plugin specification.
 
 ### `sage-crew update`
 
-1. Compare the CLI's own version with the latest published version on its
-   registry and print both; the registry is an open choice on the pull
-   request that carries this document.
+1. Compare the CLI's own version with the latest version published on
+   the npm registry under the package name `sage-crew`, and print both.
 2. Update the plugin through the harness: `claude plugin update
    sage-crew@<marketplace>` on Claude Code, `qwen extensions update` on
    Qwen Code, `hermes skills install` again on Hermes, `amp skill update
@@ -279,13 +286,22 @@ separate marketplace; that was decided in the plugin specification.
 
 `sage-crew update --check` prints the versions and changes nothing.
 
-## Open choices
+## Decisions
 
-Four choices are posed as decision comments on the pull request that
-carries this document: the CLI's language and packaging, the default
-worker count, whether `benchmark` and `research` start as two sessions,
-and where the CLI is published. The first three carry a default. The
-fourth has none.
+The maintainer answered all four choices on 2026-09-28, on the pull
+request that carries this document.
+
+1. CLI language and packaging. Answer A: Node, run with
+   `npx sage-crew@latest` and installed with `npm install -g sage-crew`.
+2. The default worker count. Answer B: three workers. The maintainer's
+   words: "workers leverage up to 20 subagents of their own; emphasize
+   how the subagent workflow capacity scales." Applied in section 2.
+3. Whether `benchmark` and `research` start as two sessions. Answer A:
+   split by default.
+4. Publishing. Answer A: under the maintainer's own npm account, with
+   the package name `sage-crew`, once the CLI's first version passes its
+   gates. Nothing is published by the pull request that carries this
+   document.
 
 ## Gaps
 
