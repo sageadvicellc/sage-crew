@@ -9,7 +9,7 @@ import {
   type FindingClass,
 } from '../src/sanitize/checks.ts';
 import { CANNOT_READ, decodeText, parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
-import { createRunner, type Runner } from '../src/runner.ts';
+import { createRunner, type Runner, type RunResult } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
 import { capture } from './helpers/io.ts';
@@ -296,6 +296,43 @@ describe('sanitize run', () => {
     expect(n.code).toBe(1);
     expect(n.err).toMatch(/deny-list: @author:1/);
     expect(n.err).toMatch(/deny-list: @author \(commit [0-9a-f]{7}\):1/);
+  });
+
+  it('a blob git cannot read fails with the reason, cut short and escaped', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    writeFileSync(join(repo.root, 'wide.txt'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('plain\n', 'utf16le')]));
+    repo.git('add', 'wide.txt');
+    const real = createRunner();
+    const failing = (result: Partial<RunResult>): Runner => ({
+      ...real,
+      run: (command, args, options) =>
+        args.includes('cat-file')
+          ? Promise.resolve({ code: null, stdout: '', stderr: '', timedOut: false, ...result })
+          : real.run(command, args, options),
+    });
+    const run = async (runner: Runner) => {
+      const err = capture();
+      const code = await runSanitize({
+        cwd: repo.root,
+        runner,
+        vars: { PATH: process.env.PATH, SANITIZE_DENYLIST: denyFile() },
+        range: 'HEAD',
+        out: () => {},
+        err: err.write,
+      });
+      return { code, err: err.text() };
+    };
+    const exit = await run(failing({ code: 128, stderr: `fatal: synthetic\u001b[2K failure\n${'x'.repeat(400)}` }));
+    expect(exit.code).toBe(1);
+    expect(exit.err).toMatch(/cannot read wide\.txt \(staged\): git cat-file failed: exit code 128: fatal: synthetic\\x1b\[2K failure x+\.\.\.\n/);
+    expect(exit.err).not.toContain('x'.repeat(300));
+    expect(exit.err).not.toContain('\u001b');
+    const spawnError = await run(failing({ error: 'spawn git ENOENT' }));
+    expect(spawnError.err).toMatch(/cannot read wide\.txt \(staged\): git cat-file could not run: spawn git ENOENT/);
+    const slow = await run(failing({ timedOut: true }));
+    expect(slow.err).toMatch(/cannot read wide\.txt \(staged\): git cat-file failed: timed out/);
   });
 
   it('59: an unset SANITIZE_DENYLIST warns, names the variable, and still runs the other checks', async () => {

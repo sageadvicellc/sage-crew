@@ -3,7 +3,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { envFromProcess } from '../env.ts';
-import { createRunner, type Runner } from '../runner.ts';
+import { printable } from '../printable.ts';
+import { createRunner, type Runner, type RunResult } from '../runner.ts';
 import {
   parseAllowlist,
   parseDenyList,
@@ -202,23 +203,50 @@ function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
 /** How much of a blob is read first, to tell text from binary. It matches the sample that decodeText checks. */
 const SAMPLE_BYTES = 8000;
 
+/** The most of a command's error text that a failure line quotes. */
+const STDERR_LIMIT = 200;
+
+/** A command's error text on one line, escaped, and cut to STDERR_LIMIT characters. */
+function errorText(text: string): string {
+  const line = printable(text.trim().replace(/\s*\n\s*/g, ' '));
+  return line.length > STDERR_LIMIT ? `${line.slice(0, STDERR_LIMIT)}...` : line;
+}
+
+/** Why a `git cat-file` run failed, or undefined when it read the blob. */
+function catFileFailure(result: RunResult): string | undefined {
+  if (result.truncated === true) return undefined;
+  if (result.error !== undefined) return `git cat-file could not run: ${errorText(result.error)}`;
+  if (result.code === 0 && result.bytes !== undefined) return undefined;
+  const exit = result.timedOut ? 'timed out' : result.code === null ? 'ended with no exit code' : `exit code ${result.code}`;
+  const detail = errorText(result.stderr);
+  return `git cat-file failed: ${exit}${detail === '' ? '' : `: ${detail}`}`;
+}
+
+type BlobRead = { ok: true; text: string | undefined } | { ok: false; reason: string };
+
+function decoded(bytes: Buffer): BlobRead {
+  const text = decodeText(bytes);
+  return text === CANNOT_READ ? { ok: false, reason: 'it looks like UTF-16 but has an odd number of bytes' } : { ok: true, text };
+}
+
 /**
  * Reads one git blob through the runner, such as `:path` for the index or
  * `<sha>:path`, and decodes it. The first SAMPLE_BYTES bytes are read
  * first. A blob that they show to be binary is skipped and never read
- * whole, so a large binary cannot fail the run. Returns the text,
- * undefined for a binary, or CANNOT_READ when git cannot read it.
+ * whole, so a large binary cannot fail the run. Returns the text, or
+ * undefined for a binary. A failure returns the reason.
  */
-async function readBlob(runner: Runner, root: string, vars: SanitizeOptions['vars'], spec: string): Promise<string | undefined | typeof CANNOT_READ> {
+async function readBlob(runner: Runner, root: string, vars: SanitizeOptions['vars'], spec: string): Promise<BlobRead> {
   const args = ['cat-file', 'blob', '--end-of-options', spec];
   const head = await runner.run('git', args, { cwd: root, env: vars, bytes: true, maxBytes: SAMPLE_BYTES });
-  const headOk = head.truncated === true || (head.code === 0 && head.error === undefined);
-  if (!headOk || head.bytes === undefined) return CANNOT_READ;
-  if (head.truncated !== true) return decodeText(head.bytes);
-  if (decodeText(head.bytes) === undefined) return undefined;
+  const headFailure = catFileFailure(head);
+  if (headFailure !== undefined || head.bytes === undefined) return { ok: false, reason: headFailure ?? 'git cat-file returned no output' };
+  if (head.truncated !== true) return decoded(head.bytes);
+  if (decodeText(head.bytes) === undefined) return { ok: true, text: undefined };
   const whole = await runner.run('git', args, { cwd: root, env: vars, bytes: true });
-  if (whole.code !== 0 || whole.error !== undefined || whole.bytes === undefined) return CANNOT_READ;
-  return decodeText(whole.bytes);
+  const wholeFailure = catFileFailure(whole);
+  if (wholeFailure !== undefined || whole.bytes === undefined) return { ok: false, reason: wholeFailure ?? 'git cat-file returned no output' };
+  return decoded(whole.bytes);
 }
 
 /** The paths that `git ... --numstat -z` lists as binary, shown as `-\t-\t<path>`. */
@@ -348,9 +376,9 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     for (const path of binaryPaths(listed.stdout)) {
       if (path === deny.selfPath) continue;
       const where = `${path} (${label})`;
-      const text = await readBlob(opts.runner, root, opts.vars, specFor(path));
-      if (text === CANNOT_READ) failures.push(`cannot read ${where}`);
-      else if (text !== undefined) findings.push(...scanText(text, { where, path, ...(deny.list ? { deny: deny.list } : {}), allow }));
+      const blob = await readBlob(opts.runner, root, opts.vars, specFor(path));
+      if (!blob.ok) failures.push(`cannot read ${where}: ${blob.reason}`);
+      else if (blob.text !== undefined) findings.push(...scanText(blob.text, { where, path, ...(deny.list ? { deny: deny.list } : {}), allow }));
     }
   };
   const BINARY_LIST = ['--numstat', '-z', '--no-renames', '--diff-filter=ACMRT'];
