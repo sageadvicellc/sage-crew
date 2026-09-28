@@ -1,4 +1,4 @@
-import { chmodSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -9,7 +9,7 @@ import {
   type FindingClass,
 } from '../src/sanitize/checks.ts';
 import { parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
-import { createRunner } from '../src/runner.ts';
+import { createRunner, type Runner } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
 import { capture } from './helpers/io.ts';
@@ -319,6 +319,62 @@ describe('sanitize run', () => {
     writeFileSync(join(odd.root, 'odd2.txt'), Buffer.concat([leak, Buffer.from([0x41])]));
     odd.git('add', 'odd2.txt');
     expect((await sanitize(odd.root, vars, 'HEAD')).err).toMatch(/sanitize: cannot read odd2\.txt \(staged\)/);
+  });
+
+  it('a committed line that holds a separator and a git option changes nothing on disk', async () => {
+    const target = join(makeFixtureHome(), 'target.txt');
+    writeFileSync(target, 'keep this text\n');
+    const before = statSync(target).mtimeMs;
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    for (const separator of ['\x1e', '\x1f']) {
+      repo.write(`trap-${separator.charCodeAt(0)}.md`, `a\n${separator}--output=${target}\nsee ${fake.macHome}/x\n`);
+      repo.commit('chore: add trap');
+    }
+    repo.git('commit', '-q', '--allow-empty', '-m', `chore: note\n\n\x1e--output=${target}`);
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD~3..HEAD');
+    expect(readFileSync(target, 'utf8')).toBe('keep this text\n');
+    expect(statSync(target).mtimeMs).toBe(before);
+    expect(result.code).toBe(1);
+    // Every commit is read whole, so the leak after the trap line is found in each.
+    expect(result.err.match(/private-path: trap-\d+\.md \(commit [0-9a-f]{7}\):3/g)).toHaveLength(2);
+    expect(result.err).not.toMatch(/cannot read|unexpected/);
+  });
+
+  it('a commit id that is not hex is a failure, and never reaches git', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    const real = createRunner();
+    const seen: string[][] = [];
+    const runner: Runner = {
+      ...real,
+      run: (command, args, options) => {
+        seen.push([...args]);
+        if (args.includes('--format=%H')) {
+          return Promise.resolve({ code: 0, stdout: '--output=/dev/null\0', stderr: '', timedOut: false });
+        }
+        return real.run(command, args, options);
+      },
+    };
+    const err = capture();
+    const code = await runSanitize({
+      cwd: repo.root,
+      runner,
+      vars: { PATH: process.env.PATH, SANITIZE_DENYLIST: denyFile() },
+      range: 'HEAD',
+      out: () => {},
+      err: err.write,
+    });
+    expect(code).toBe(1);
+    expect(err.text()).toMatch(/sanitize: the commit list for HEAD holds a value that is not a commit id/);
+    expect(seen.filter((args) => args.includes('--output=/dev/null'))).toEqual([]);
+    // Every revision that git receives follows --end-of-options.
+    for (const args of seen) {
+      const range = args.indexOf('HEAD');
+      if (range !== -1) expect(args.indexOf('--end-of-options')).toBe(range - 1);
+    }
   });
 
   it('a leak added only inside a merge commit fails', async () => {

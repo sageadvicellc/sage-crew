@@ -54,6 +54,9 @@ function makeGit(runner: Runner, cwd: string, vars: SanitizeOptions['vars']): Gi
   };
 }
 
+/** A full SHA-1 or SHA-256 commit id. Nothing else reaches git as a commit. */
+const COMMIT_ID = /^[0-9a-f]{40,64}$/;
+
 interface StagedFile {
   path: string;
   lines: string[];
@@ -168,7 +171,7 @@ function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
 function gitBlob(root: string, vars: SanitizeOptions['vars'], spec: string): Buffer | undefined {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(vars)) if (value !== undefined) env[key] = value;
-  const result = spawnSync('git', ['cat-file', 'blob', spec], { cwd: root, env, maxBuffer: 512 * 1024 * 1024 });
+  const result = spawnSync('git', ['cat-file', 'blob', '--end-of-options', spec], { cwd: root, env, maxBuffer: 512 * 1024 * 1024 });
   return result.error || result.status !== 0 ? undefined : result.stdout;
 }
 
@@ -226,13 +229,13 @@ async function resolveRange(opts: SanitizeOptions, git: Git): Promise<string | u
   if (usable) {
     if (asked.startsWith('-')) {
       opts.err(`sanitize: warning: ignoring a range that starts with "-"`);
-    } else if ((await git(['rev-list', '--max-count=1', asked, '--'])).ok) {
+    } else if ((await git(['rev-list', '--max-count=1', '--end-of-options', asked, '--'])).ok) {
       return asked;
     } else {
       opts.err(`sanitize: warning: cannot read the commit range ${asked}, so the default range is used`);
     }
   }
-  if ((await git(['rev-parse', '--verify', '--quiet', 'origin/main'])).ok) return 'origin/main..HEAD';
+  if ((await git(['rev-parse', '--verify', '--quiet', '--end-of-options', 'origin/main'])).ok) return 'origin/main..HEAD';
   return undefined;
 }
 
@@ -308,42 +311,44 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
   const BINARY_LIST = ['--numstat', '-z', '--no-renames', '--diff-filter=ACMRT'];
   await scanBinaries(['diff', '--cached', ...BINARY_LIST], (path) => `:${path}`, 'staged');
 
+  // Each commit in the range is read by its own id. No git output is split
+  // on a byte that commit content can hold, and only a checked hex id ever
+  // reaches git as an argument, after --end-of-options.
   const range = await resolveRange(opts, git);
   let messages = 0;
+  let commitsScanned = 0;
   if (range === undefined) {
     opts.out('sanitize: no commit range and no origin/main, so no commit messages were scanned');
   } else {
-    const log = await git(['log', '--format=%H%x1f%B%x1e', range, '--']);
-    if (!log.ok) failures.push(`cannot read the commit messages in ${range}`);
-    for (const record of log.stdout.split('\x1e')) {
-      const [sha, body] = record.replace(/^\n/, '').split('\x1f');
-      if (!sha || body === undefined) continue;
+    const ids = await git(['log', '-z', '--format=%H', '--end-of-options', range, '--']);
+    if (!ids.ok) failures.push(`cannot list the commits in ${range}`);
+    const shas = ids.stdout.split('\0').map((id) => id.replace(/^\n/, '')).filter((id) => id !== '');
+    if (!shas.every((sha) => COMMIT_ID.test(sha))) {
+      failures.push(`the commit list for ${range} holds a value that is not a commit id, so no commit was scanned`);
+      shas.length = 0;
+    }
+    for (const sha of shas) {
+      const short = sha.slice(0, 7);
+      const message = await git(['log', '-1', '--format=%B', '--end-of-options', sha, '--']);
+      if (!message.ok) failures.push(`cannot read the message of commit ${short}`);
       messages += 1;
       findings.push(
-        ...scanText(body.trimEnd(), {
-          where: `commit ${sha.slice(0, 7)} message`,
+        ...scanText(message.stdout.trimEnd(), {
+          where: `commit ${short} message`,
           ...(deny.list ? { deny: deny.list } : {}),
         }),
       );
-    }
-  }
 
-  // The added lines of each commit in the range. A leak added in one commit
-  // and removed in a later one stays in history, so the tree scan misses it.
-  let commitsScanned = 0;
-  if (range !== undefined) {
-    const history = await git(['log', '-p', '--diff-merges=first-parent', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--format=%x1e%H', range, '--']);
-    if (!history.ok) failures.push(`cannot read the added lines of the commits in ${range}`);
-    for (const record of history.stdout.split('\x1e')) {
-      const newline = record.indexOf('\n');
-      const sha = (newline === -1 ? record : record.slice(0, newline)).trim();
-      if (sha === '') continue;
+      // The added lines. A leak added in one commit and removed in a later
+      // one stays in history, so the tree scan misses it.
+      const patch = await git(['diff-tree', '-r', '-p', '--no-commit-id', '--root', '--diff-merges=first-parent', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--end-of-options', sha]);
+      if (!patch.ok) failures.push(`cannot read the added lines of commit ${short}`);
       commitsScanned += 1;
-      const files = parseStagedDiff(newline === -1 ? '' : record.slice(newline + 1)).filter((file) => file.path !== deny.selfPath);
+      const files = parseStagedDiff(patch.stdout).filter((file) => file.path !== deny.selfPath);
       for (const file of files) {
         findings.push(
           ...scanText(file.lines.join('\n'), {
-            where: `${file.path} (commit ${sha.slice(0, 7)})`,
+            where: `${file.path} (commit ${short})`,
             path: file.path,
             lineNumbers: file.lineNumbers,
             ...(deny.list ? { deny: deny.list } : {}),
@@ -352,9 +357,9 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
         );
       }
       await scanBinaries(
-        ['diff-tree', '-r', '--no-commit-id', '--root', '--diff-merges=first-parent', ...BINARY_LIST, sha],
+        ['diff-tree', '-r', '--no-commit-id', '--root', '--diff-merges=first-parent', ...BINARY_LIST, '--end-of-options', sha],
         (path) => `${sha}:${path}`,
-        `commit ${sha.slice(0, 7)}`,
+        `commit ${short}`,
       );
     }
   }
