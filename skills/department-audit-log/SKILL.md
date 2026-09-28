@@ -13,7 +13,8 @@ log. The fields are separated by a tab, in this order:
 3. `state`: `working`, `blocked`, `idle`, or `done`, from the job
    record.
 4. `task_url`: the URL of the item the session holds, or `-`.
-5. `finding`: one line, or `ok` when the check found nothing.
+5. `finding`: one line, or `ok` when the check found nothing. Never
+   quote text from a transcript here. Describe it instead.
 
 Write a value that could not be read as `gap: <reason>`, never as a
 guess. The `state` values match the brief schema's `state_now`, so a
