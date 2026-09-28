@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
+import type { Transport } from './roles/schema.ts';
 
-export type TransportFlag = 'native' | 'a2a' | 'mcp-mailbox' | 'file-mailbox';
+export type TransportFlag = Transport;
 
 export type Command =
   | { name: 'help' }
@@ -29,10 +30,10 @@ export const USAGE = `Usage:
   trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N]
   trellis-crew --roles sagespec.yml    (shorthand for start with a roles file)`;
 
+// No mcp-mailbox: this build carries the file mailbox only (plan decision 16).
 const TRANSPORTS: Record<string, TransportFlag> = {
   file: 'file-mailbox',
   'file-mailbox': 'file-mailbox',
-  'mcp-mailbox': 'mcp-mailbox',
   native: 'native',
   a2a: 'a2a',
 };

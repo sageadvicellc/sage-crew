@@ -44,6 +44,8 @@ describe('args', () => {
       command: { name: 'install', transport: 'file-mailbox' },
     });
     expect(parseCommand(['install', '--transport', 'pigeon']).ok).toBe(false);
+    // Plan decision 16: no MCP mailbox in this build.
+    expect(parseCommand(['install', '--transport', 'mcp-mailbox']).ok).toBe(false);
   });
 
   it('parses help and version', () => {
