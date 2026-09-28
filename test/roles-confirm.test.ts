@@ -25,8 +25,20 @@ describe('roles file confirm screen', () => {
     expect(await main(['start', '--yes'], t.deps)).toBe(0);
     const text = t.out.text();
     expect(text).toContain('transport: file-mailbox');
-    expect(text).toContain('mailbox: ~/team-mail');
+    expect(text).toContain(`mailbox: ${join(t.env.home, 'team-mail')}\n`);
     expect(text).toMatch(/helper-a:\n {2}You help\.\n {2}model: model-a/);
+  });
+
+  it('shows the mailbox resolved as start and respawn use it: a relative path, and the default', async () => {
+    const relative = installedOn('qwen-code', 'file-mailbox');
+    writeFileSync(join(relative.env.cwd, 'sagespec.yml'), TEAM.replace('mailbox: ~/team-mail', 'mailbox: shared/mail'));
+    expect(await main(['start', '--yes'], relative.deps)).toBe(0);
+    expect(relative.out.text()).toContain(`mailbox: ${join(relative.env.cwd, 'shared', 'mail')}\n`);
+
+    const fallback = installedOn('qwen-code', 'file-mailbox');
+    writeFileSync(join(fallback.env.cwd, 'sagespec.yml'), TEAM.replace('\nmailbox: ~/team-mail', ''));
+    expect(await main(['start', '--yes'], fallback.deps)).toBe(0);
+    expect(fallback.out.text()).toContain(`mailbox: ${join(fallback.env.home, '.trellis-crew', 'mailbox')} (the default)\n`);
   });
 });
 

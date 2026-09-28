@@ -7,7 +7,7 @@ import { terminalAsk } from '../detect/confirm.ts';
 import { printable } from '../printable.ts';
 import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { composeKickoff } from '../kickoff/compose.ts';
-import { DEFAULT_MAILBOX, ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
+import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam, type LoadOptions, type LoadResult } from '../roles/load.ts';
 import type { HarnessId, RolesConfig, Session, Transport } from '../roles/schema.ts';
 import { readInstallRecord } from '../store/install-yml.ts';
@@ -76,7 +76,9 @@ function showRoles(file: string, config: RolesConfig, heading: string, deps: Cli
   deps.out(`${heading}: ${printable(file)}`);
   deps.out(`harness: ${config.harness}`);
   deps.out(`transport: ${config.transport}`);
-  deps.out(`mailbox: ${printable(config.mailbox ?? `${DEFAULT_MAILBOX} (the default)`)}`);
+  // The path that planLaunch uses, at start and at respawn.
+  const mailbox = mailboxPath(config, deps.env);
+  deps.out(`mailbox: ${printable(mailbox)}${config.mailbox === undefined ? ' (the default)' : ''}`);
   for (const [name, profile] of Object.entries(config.task_profiles)) {
     const parts = [profile.model === undefined ? '' : `model ${profile.model}`, profile.effort === undefined ? '' : `effort ${profile.effort}`];
     deps.out(printable(`task profile ${name}: ${parts.filter((p) => p !== '').join(', ')}`));
