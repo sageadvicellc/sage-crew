@@ -13,13 +13,16 @@ Every hand-off message states three things, in this order:
 
 A fourth part is optional:
 
-4. The task profile, by its name in the roles file's `task_profiles`.
+4. The task profile, by its name in `task_profiles` of the team's
+   roles file: `./sagespec.yml`, or the file given with `--roles`.
    The worker runs the unit through subagents with that profile's model
    and effort. Without a profile, the unit runs on the worker's own
    model and effort.
 
 The lead picks the profile. Never send a hand-off without the first
 three parts, and never name a profile the roles file does not define.
+A worker that gets an undefined profile runs on its own model and
+effort, and reports the mismatch to the lead.
 
 Trigger: any role about to send a hand-off.
 
