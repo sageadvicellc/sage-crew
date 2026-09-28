@@ -52,6 +52,30 @@ describe('runner', () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it('keeps raw output bytes when asked, so binary output survives', async () => {
+    const bytes = Buffer.from([0xff, 0xfe, 0x61, 0x00, 0x80, 0x0a]);
+    const result = await runner.run(process.execPath, ['-e', `process.stdout.write(Buffer.from([${[...bytes].join(',')}]))`], {
+      env: { PATH: '/bin:/usr/bin' },
+      bytes: true,
+    });
+    expect(result.code).toBe(0);
+    expect(result.truncated).toBeFalsy();
+    expect(result.bytes?.equals(bytes)).toBe(true);
+    const text = await runner.run(process.execPath, ['-e', 'process.stdout.write("plain")'], { env: { PATH: '/bin:/usr/bin' } });
+    expect(text.stdout).toBe('plain');
+    expect(text.bytes).toBeUndefined();
+  });
+
+  it('stops reading at maxBytes and ends the command', async () => {
+    const started = Date.now();
+    const script = 'process.stdout.write(Buffer.alloc(100000, 7)); setTimeout(() => {}, 30000)';
+    const result = await runner.run(process.execPath, ['-e', script], { env: { PATH: '/bin:/usr/bin' }, bytes: true, maxBytes: 8000 });
+    expect(result.truncated).toBe(true);
+    expect(result.bytes?.length).toBe(8000);
+    expect(result.bytes?.every((b) => b === 7)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it('reports a missing binary as a failed result, never a throw', async () => {
     const result = await runner.run(join(fixtureBin, 'no-such-binary'), [], {
       env: { PATH: fixtureBin },

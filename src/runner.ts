@@ -8,6 +8,10 @@ export interface RunOptions {
   timeoutMs?: number;
   /** Written to the child's standard input, which is then closed. */
   input?: string;
+  /** Also returns standard output as raw bytes, for output that is not UTF-8 text. */
+  bytes?: boolean;
+  /** With `bytes`, stops reading after this many bytes and ends the command. */
+  maxBytes?: number;
 }
 
 export interface RunResult {
@@ -18,6 +22,10 @@ export interface RunResult {
   timedOut: boolean;
   /** Set when the process could not start. */
   error?: string;
+  /** Standard output as raw bytes. Set only when RunOptions.bytes is true. */
+  bytes?: Buffer;
+  /** True when the output reached RunOptions.maxBytes, so the command was ended and `bytes` holds only its start. */
+  truncated?: boolean;
 }
 
 /** Starts processes. Every module takes a Runner, so tests record calls instead. */
@@ -119,6 +127,8 @@ export function createRunner(): Runner {
       return new Promise<RunResult>((resolve) => {
         let stdout = '';
         let stderr = '';
+        const chunks: Buffer[] = [];
+        let size = 0;
         let timedOut = false;
         let settled = false;
         let timer: NodeJS.Timeout | undefined;
@@ -126,7 +136,13 @@ export function createRunner(): Runner {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          resolve(result);
+          if (!options.bytes) {
+            resolve(result);
+            return;
+          }
+          const all = Buffer.concat(chunks);
+          const bytes = options.maxBytes !== undefined && all.length > options.maxBytes ? all.subarray(0, options.maxBytes) : all;
+          resolve({ ...result, stdout: bytes.toString('utf8'), bytes });
         };
         let child;
         try {
@@ -151,11 +167,24 @@ export function createRunner(): Runner {
             finish({ code: null, stdout, stderr, timedOut });
           }, options.timeoutMs);
         }
-        child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
-        child.stdout.on('data', (chunk: string) => {
-          stdout += chunk;
-        });
+        if (options.bytes) {
+          child.stdout.on('data', (chunk: Buffer) => {
+            chunks.push(chunk);
+            size += chunk.length;
+            if (options.maxBytes !== undefined && size >= options.maxBytes) {
+              killGroup(started.pid);
+              started.stdout.destroy();
+              started.stderr.destroy();
+              finish({ code: null, stdout, stderr, timedOut, truncated: true });
+            }
+          });
+        } else {
+          child.stdout.setEncoding('utf8');
+          child.stdout.on('data', (chunk: string) => {
+            stdout += chunk;
+          });
+        }
         child.stderr.on('data', (chunk: string) => {
           stderr += chunk;
         });

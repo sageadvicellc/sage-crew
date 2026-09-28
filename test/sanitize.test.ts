@@ -377,6 +377,44 @@ describe('sanitize run', () => {
     }
   });
 
+  it('a large binary blob is classified from its first 8,000 bytes and never read whole', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    const binary = Buffer.alloc(2 * 1024 * 1024, 0x41);
+    for (let i = 0; i < binary.length; i += 97) binary[i] = 0;
+    writeFileSync(join(repo.root, 'big.bin'), binary);
+    const wide = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${'plain '.repeat(2000)}see ${fake.macHome}/x\n`, 'utf16le')]);
+    writeFileSync(join(repo.root, 'wide.txt'), wide);
+    repo.git('add', 'big.bin', 'wide.txt');
+    const real = createRunner();
+    const reads: Array<{ spec: string; maxBytes: number | undefined }> = [];
+    const runner: Runner = {
+      ...real,
+      run: (command, args, options) => {
+        if (args.includes('cat-file')) reads.push({ spec: args[args.length - 1] as string, maxBytes: options?.maxBytes });
+        return real.run(command, args, options);
+      },
+    };
+    const err = capture();
+    const code = await runSanitize({
+      cwd: repo.root,
+      runner,
+      vars: { PATH: process.env.PATH, SANITIZE_DENYLIST: denyFile() },
+      range: 'HEAD',
+      out: () => {},
+      err: err.write,
+    });
+    expect(code).toBe(1);
+    expect(err.text()).toMatch(/private-path: wide\.txt \(staged\):1/);
+    expect(err.text()).not.toMatch(/big\.bin/);
+    expect(reads.filter((r) => r.spec === ':big.bin')).toEqual([{ spec: ':big.bin', maxBytes: 8000 }]);
+    expect(reads.filter((r) => r.spec === ':wide.txt')).toEqual([
+      { spec: ':wide.txt', maxBytes: 8000 },
+      { spec: ':wide.txt', maxBytes: undefined },
+    ]);
+  });
+
   it('a leak added only inside a merge commit fails', async () => {
     const repo = makeFixtureRepo();
     repo.write('clean.md', 'nothing\n');

@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -167,12 +166,26 @@ function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
   }
 }
 
-/** Reads one git blob as raw bytes, such as `:path` for the index or `<sha>:path`. Undefined when git cannot read it. */
-function gitBlob(root: string, vars: SanitizeOptions['vars'], spec: string): Buffer | undefined {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(vars)) if (value !== undefined) env[key] = value;
-  const result = spawnSync('git', ['cat-file', 'blob', '--end-of-options', spec], { cwd: root, env, maxBuffer: 512 * 1024 * 1024 });
-  return result.error || result.status !== 0 ? undefined : result.stdout;
+/** How much of a blob is read first, to tell text from binary. It matches the sample that decodeText checks. */
+const SAMPLE_BYTES = 8000;
+
+/**
+ * Reads one git blob through the runner, such as `:path` for the index or
+ * `<sha>:path`, and decodes it. The first SAMPLE_BYTES bytes are read
+ * first. A blob that they show to be binary is skipped and never read
+ * whole, so a large binary cannot fail the run. Returns the text,
+ * undefined for a binary, or CANNOT_READ when git cannot read it.
+ */
+async function readBlob(runner: Runner, root: string, vars: SanitizeOptions['vars'], spec: string): Promise<string | undefined | typeof CANNOT_READ> {
+  const args = ['cat-file', 'blob', '--end-of-options', spec];
+  const head = await runner.run('git', args, { cwd: root, env: vars, bytes: true, maxBytes: SAMPLE_BYTES });
+  const headOk = head.truncated === true || (head.code === 0 && head.error === undefined);
+  if (!headOk || head.bytes === undefined) return CANNOT_READ;
+  if (head.truncated !== true) return decodeText(head.bytes);
+  if (decodeText(head.bytes) === undefined) return undefined;
+  const whole = await runner.run('git', args, { cwd: root, env: vars, bytes: true });
+  if (whole.code !== 0 || whole.error !== undefined || whole.bytes === undefined) return CANNOT_READ;
+  return decodeText(whole.bytes);
 }
 
 /** The paths that `git ... --numstat -z` lists as binary, shown as `-\t-\t<path>`. */
@@ -302,8 +315,7 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     for (const path of binaryPaths(listed.stdout)) {
       if (path === deny.selfPath) continue;
       const where = `${path} (${label})`;
-      const blob = gitBlob(root, opts.vars, specFor(path));
-      const text = blob === undefined ? CANNOT_READ : decodeText(blob);
+      const text = await readBlob(opts.runner, root, opts.vars, specFor(path));
       if (text === CANNOT_READ) failures.push(`cannot read ${where}`);
       else if (text !== undefined) findings.push(...scanText(text, { where, path, ...(deny.list ? { deny: deny.list } : {}), allow }));
     }
