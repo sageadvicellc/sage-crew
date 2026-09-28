@@ -1,5 +1,6 @@
 import type { HarnessId } from '../roles/schema.ts';
 import { claudeCodeAdapter } from './claude-code.ts';
+import { codexAdapter } from './codex.ts';
 import { hermesAdapter } from './hermes.ts';
 import { qwenCodeAdapter } from './qwen-code.ts';
 import type { Adapter } from './types.ts';
@@ -9,6 +10,7 @@ export const BUILT_ADAPTERS: Partial<Record<HarnessId, Adapter>> = {
   'claude-code': claudeCodeAdapter,
   'qwen-code': qwenCodeAdapter,
   hermes: hermesAdapter,
+  codex: codexAdapter,
 };
 
 export function adapterFor(

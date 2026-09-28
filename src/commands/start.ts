@@ -1,6 +1,7 @@
+import { rmSync } from 'node:fs';
 import { buildLaunchFlags, launchValues } from '../adapters/flags.ts';
 import { adapterFor } from '../adapters/index.ts';
-import type { Adapter, LaunchValues } from '../adapters/types.ts';
+import type { Adapter, AdapterContext, LaunchItem, LaunchValues } from '../adapters/types.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from '../deps.ts';
 import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { composeKickoff } from '../kickoff/compose.ts';
@@ -72,6 +73,28 @@ export function planLaunch(config: RolesConfig, deps: CliDeps): { ok: true; plan
   return { ok: true, plan };
 }
 
+/** Builds one session's flags and kickoff, and prints its warnings. */
+export function prepareSession(
+  config: RolesConfig,
+  session: Session,
+  plan: LaunchPlan,
+  deps: CliDeps,
+  overrides: LaunchValues = {},
+): LaunchItem {
+  const { args, warnings } = buildLaunchFlags(session.name, launchValues(session, overrides), plan.adapter);
+  for (const warning of warnings) deps.err(warning);
+  const kickoff = composeKickoff(config, session, {
+    harness: plan.harness,
+    transport: plan.transport,
+    ...(plan.mailbox === undefined ? {} : { mailboxPath: plan.mailbox }),
+  });
+  return { name: session.name, kickoff, flagArgs: args };
+}
+
+function contextFor(plan: LaunchPlan, deps: CliDeps): AdapterContext {
+  return { env: deps.env, runner: deps.runner, binaryPath: plan.binaryPath, out: deps.out };
+}
+
 /** Starts one session and prints its warnings. */
 export async function launchSession(
   config: RolesConfig,
@@ -80,19 +103,8 @@ export async function launchSession(
   deps: CliDeps,
   overrides: LaunchValues = {},
 ): Promise<{ ok: true; entry: TeamEntry } | { ok: false; message: string }> {
-  const { args, warnings } = buildLaunchFlags(session.name, launchValues(session, overrides), plan.adapter);
-  for (const warning of warnings) deps.err(warning);
-  const kickoff = composeKickoff(config, session, {
-    harness: plan.harness,
-    transport: plan.transport,
-    ...(plan.mailbox === undefined ? {} : { mailboxPath: plan.mailbox }),
-  });
-  return plan.adapter.launch(session.name, kickoff, args, {
-    env: deps.env,
-    runner: deps.runner,
-    binaryPath: plan.binaryPath,
-    out: deps.out,
-  });
+  const item = prepareSession(config, session, plan, deps, overrides);
+  return plan.adapter.launch(item.name, item.kickoff, item.flagArgs, contextFor(plan, deps));
 }
 
 function describeEntry(entry: TeamEntry): string {
@@ -118,6 +130,7 @@ export async function launchTeam(config: RolesConfig, deps: CliDeps, source: Tea
 
   const record: TeamRecord = { version: 1, harness: plan.harness, transport: plan.transport, roles: source, sessions: [] };
   if (plan.mailbox !== undefined) record.mailbox = plan.mailbox;
+  if (plan.adapter.launchAll !== undefined) return launchSupervised(config, plan, record, deps);
   for (const session of config.sessions) {
     const outcome = await launchSession(config, session, plan, deps);
     if (!outcome.ok) {
@@ -133,5 +146,33 @@ export async function launchTeam(config: RolesConfig, deps: CliDeps, source: Tea
     deps.out(`Started ${session.name}${describeEntry(outcome.entry)}.`);
   }
   deps.out(`Started ${record.sessions.length} sessions on ${plan.adapter.displayName}. Team record: ${teamJsonPath(deps.env)}`);
+  return EXIT_OK;
+}
+
+/**
+ * Hands the whole team to the adapter's detached supervisor. team.json is
+ * written first with no pids, then again with the supervisor's pid. The
+ * supervisor starts no child until the record names it, so its pid writes
+ * never race the CLI's writes.
+ */
+async function launchSupervised(config: RolesConfig, plan: LaunchPlan, record: TeamRecord, deps: CliDeps): Promise<number> {
+  const items = config.sessions.map((session) => prepareSession(config, session, plan, deps));
+  record.sessions = items.map((item) => ({ name: item.name, pid: null, session_id: null }));
+  writeTeam(deps.env, record);
+  const outcome = (await plan.adapter.launchAll?.(items, contextFor(plan, deps), teamJsonPath(deps.env))) ?? {
+    ok: false as const,
+    message: `${plan.adapter.displayName} has no supervisor`,
+  };
+  if (!outcome.ok) {
+    rmSync(teamJsonPath(deps.env), { force: true });
+    deps.err(`The supervisor could not start: ${outcome.message}`);
+    return EXIT_RUNTIME;
+  }
+  record.supervisor_pid = outcome.supervisorPid;
+  writeTeam(deps.env, record);
+  deps.out(
+    `Started the supervisor (pid ${outcome.supervisorPid}). It starts ${items.length} sessions on ${plan.adapter.displayName} and records each pid.`,
+  );
+  deps.out(`Team record: ${teamJsonPath(deps.env)}`);
   return EXIT_OK;
 }

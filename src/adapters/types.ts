@@ -45,4 +45,19 @@ export interface Adapter {
   inboundTarget?(env: Env): InboundTarget;
   /** Extra status lines from the harness's own session list. */
   statusLines?(ctx: AdapterContext): Promise<string[]>;
+  /**
+   * Hands every session to one detached supervisor, on a harness that
+   * needs one. The supervisor writes each child's pid into the team record
+   * at `teamPath` once that record names the supervisor.
+   */
+  launchAll?(items: readonly LaunchItem[], ctx: AdapterContext, teamPath: string): Promise<SupervisorOutcome>;
 }
+
+/** One session for a supervisor to start. */
+export interface LaunchItem {
+  name: string;
+  kickoff: string;
+  flagArgs: readonly string[];
+}
+
+export type SupervisorOutcome = { ok: true; supervisorPid: number } | { ok: false; message: string };

@@ -65,7 +65,11 @@ function isEntry(value: unknown): value is TeamEntry {
 
 /** Reads team.json. A missing file is no team. A damaged file is an error, never a guess. */
 export function readTeam(env: Env): ReadResult<TeamRecord> {
-  const path = teamJsonPath(env);
+  return readTeamFile(teamJsonPath(env));
+}
+
+/** Reads a team record from a path. */
+export function readTeamFile(path: string): ReadResult<TeamRecord> {
   if (!existsSync(path)) return { ok: true, record: undefined };
   let data: unknown;
   try {
@@ -105,5 +109,10 @@ export function readTeam(env: Env): ReadResult<TeamRecord> {
 /** Writes team.json atomically, creating the state folder when needed. */
 export function writeTeam(env: Env, record: TeamRecord): void {
   mkdirSync(stateDir(env), { recursive: true, mode: 0o700 });
-  writeFileAtomic(teamJsonPath(env), `${JSON.stringify(record, null, 2)}\n`, 0o600);
+  writeTeamFile(teamJsonPath(env), record);
+}
+
+/** Writes a team record to a path atomically. */
+export function writeTeamFile(path: string, record: TeamRecord): void {
+  writeFileAtomic(path, `${JSON.stringify(record, null, 2)}\n`, 0o600);
 }
