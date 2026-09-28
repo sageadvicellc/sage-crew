@@ -91,6 +91,25 @@ function isBinary(buffer: Buffer): boolean {
   return buffer.subarray(0, 8000).includes(0);
 }
 
+const CANNOT_READ = Symbol('cannot read');
+
+/**
+ * Reads one tracked path as text: a symlink's target, or a file's content.
+ * Returns undefined for a binary file or a submodule folder, which hold no
+ * text to scan, and CANNOT_READ when the path is missing or unreadable.
+ */
+function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
+  try {
+    const stat = lstatSync(abs);
+    if (stat.isSymbolicLink()) return readlinkSync(abs);
+    if (!stat.isFile()) return undefined;
+    const buffer = readFileSync(abs);
+    return isBinary(buffer) ? undefined : buffer.toString('utf8');
+  } catch {
+    return CANNOT_READ;
+  }
+}
+
 interface DenyLoad {
   list: DenyList | undefined;
   /** The deny-list's repo-relative path when it sits inside the repository. */
@@ -174,23 +193,13 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
   const tracked = listed.stdout.split('\0').filter((p) => p !== '' && p !== deny.selfPath);
   for (const path of tracked) {
     findings.push(...scanPath(path, { ...(deny.list ? { deny: deny.list } : {}), allow }));
-    const abs = join(root, path);
-    let stat;
-    try {
-      stat = lstatSync(abs);
-    } catch {
+    const text = readTracked(join(root, path));
+    if (text === CANNOT_READ) {
+      // A file the scan cannot read is a failure, never a silent pass.
+      failures.push(`cannot read ${path}`);
       continue;
     }
-    let text: string;
-    if (stat.isSymbolicLink()) {
-      text = readlinkSync(abs);
-    } else if (stat.isFile()) {
-      const buffer = readFileSync(abs);
-      if (isBinary(buffer)) continue;
-      text = buffer.toString('utf8');
-    } else {
-      continue;
-    }
+    if (text === undefined) continue;
     findings.push(...scanText(text, { where: path, path, ...(deny.list ? { deny: deny.list } : {}), allow }));
   }
 

@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -247,6 +247,27 @@ describe('sanitize run', () => {
     const empty = join(makeFixtureHome(), 'empty.txt');
     writeFileSync(empty, '# nothing\n');
     expect((await sanitize(repo.root, { SANITIZE_DENYLIST: empty }, 'HEAD')).code).toBe(1);
+  });
+
+  it('a tracked file it cannot read fails the run and is named', async () => {
+    const locked = makeFixtureRepo();
+    locked.write('clean.md', 'nothing\n');
+    locked.write('locked.md', 'nothing\n');
+    locked.commit('chore: start');
+    chmodSync(join(locked.root, 'locked.md'), 0o000);
+    const l = await sanitize(locked.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    chmodSync(join(locked.root, 'locked.md'), 0o644);
+    expect(l.code).toBe(1);
+    expect(l.err).toMatch(/sanitize: cannot read locked\.md/);
+
+    const gone = makeFixtureRepo();
+    gone.write('clean.md', 'nothing\n');
+    gone.write('gone.md', 'nothing\n');
+    gone.commit('chore: start');
+    rmSync(join(gone.root, 'gone.md'));
+    const g = await sanitize(gone.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(g.code).toBe(1);
+    expect(g.err).toMatch(/sanitize: cannot read gone\.md/);
   });
 
   it('60: the repository passes with the fixture deny-list', async () => {
