@@ -126,7 +126,7 @@ that you set and prints a warning that names the session and the field.
 By default, on every harness except Claude Code and Qwen Code, sessions
 talk through a file mailbox. The default folder is
 `~/.trellis-crew/mailbox`. Set `mailbox` in the roles file to use
-another folder.
+another folder. The value must not hold a `..` part.
 
 ### Exit codes
 

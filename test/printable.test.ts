@@ -37,7 +37,7 @@ describe('printable', () => {
       expect(printable(`a${raw}b`), shown).toBe(`a${shown}b`);
     }
     // Neighbours of each range, and ordinary non-ASCII text, stay as they are.
-    for (const plain of ['\u{e0080}', '\u{e01f0}', '\u{dffff}', '\u200a', '\u2065', '\ufdff', '\ufe10', '\u115e', '\u3165', '\ufff8', 'caf\u00e9', '\u65e5\u672c', '\u{1f331}']) {
+    for (const plain of ['\u{e1000}', '\u{dffff}', '\u200a', '\u2070', '\ufdff', '\ufe10', '\u115e', '\u3165', '\ufffc', 'caf\u00e9', '\u65e5\u672c', '\u{1f331}']) {
       expect(hasControlCharacter(plain), plain).toBe(false);
       expect(printable(plain)).toBe(plain);
     }
@@ -62,6 +62,11 @@ describe('printable', () => {
       ['\u1160', '\\u1160'],
       ['\u3164', '\\u3164'],
       ['\uffa0', '\\uffa0'],
+      ['\u034f', '\\u034f'],
+      ['\u180b', '\\u180b'],
+      ['\u180c', '\\u180c'],
+      ['\u180d', '\\u180d'],
+      ['\u180f', '\\u180f'],
     ];
     for (const [raw, shown] of hidden) {
       expect(hasControlCharacter(`a${raw}b`), shown).toBe(true);

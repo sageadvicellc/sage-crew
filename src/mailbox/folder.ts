@@ -11,6 +11,15 @@ import type { RolesConfig } from '../roles/schema.ts';
  */
 export const DEFAULT_MAILBOX = '~/.trellis-crew/mailbox';
 
+/**
+ * True when a path holds a `..` part. Path code removes `..` by text, but
+ * the kernel follows a symlink first and then applies `..`, so the two
+ * can name different folders. A mailbox path with `..` is refused.
+ */
+export function hasParentPart(path: string): boolean {
+  return path.split('/').includes('..');
+}
+
 /** The mailbox folder for a team: `~` expands to the Env home, and a relative path resolves against the current folder. */
 export function mailboxPath(config: Pick<RolesConfig, 'mailbox'>, env: Env): string {
   const expanded = expandHome(config.mailbox ?? DEFAULT_MAILBOX, env);
@@ -31,6 +40,9 @@ export function ensureMailboxFolder(
   path: string,
   options: { mkdir?: (path: string) => void; uid?: number; lstat?: (path: string) => Stats } = {},
 ): MailboxResult {
+  if (hasParentPart(path)) {
+    return { ok: false, path, message: `The mailbox folder ${path} must not hold a .. part. Name the folder with no .. in it` };
+  }
   const mkdir = options.mkdir ?? ((target: string) => mkdirSync(target, { recursive: true, mode: 0o700 }));
   const uid = options.uid ?? process.getuid?.();
   const check = (): string | undefined => parentFolderProblem(path, uid, options.lstat === undefined ? {} : { lstat: options.lstat }) ?? privateFolderProblem(path, uid);

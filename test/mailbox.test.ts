@@ -153,6 +153,27 @@ describe('file mailbox folder', () => {
     expect(parentFolderProblem(path, own, { lstat: rootOwned })).toBeUndefined();
   });
 
+  it('a mailbox path with a .. part after a link is refused, and nothing is created', () => {
+    const env = makeTestEnv();
+    const own = process.getuid?.();
+    const target = join(env.home, 'target');
+    mkdirSync(join(target, 'inner'), { recursive: true, mode: 0o700 });
+    mkdirSync(join(env.home, 's'), { mode: 0o700 });
+    const link = join(env.home, 's', 'l');
+    symlinkSync(join(target, 'inner'), link);
+    const path = `${link}/../mbox/x`;
+    const lstat = (p: string) => {
+      const stat = lstatSync(p);
+      return p === link && own !== undefined ? Object.assign(Object.create(Object.getPrototypeOf(stat) as object) as typeof stat, stat, { uid: own + 1 }) : stat;
+    };
+    for (const options of [{}, { lstat }]) {
+      const result = ensureMailboxFolder(path, options);
+      expect(result).toMatchObject({ ok: false, message: expect.stringContaining(`${path} must not hold a .. part`) });
+    }
+    expect(existsSync(join(target, 'mbox'))).toBe(false);
+    expect(existsSync(join(env.home, 's', 'mbox'))).toBe(false);
+  });
+
   it('a folder owned by another user is refused', () => {
     const env = makeTestEnv();
     const path = join(env.home, 'theirs');

@@ -196,6 +196,19 @@ describe('roles file', () => {
     expect(errorsOf(ok)).toEqual([]);
   });
 
+  it('a mailbox with a .. part fails and names the value', () => {
+    for (const value of ['/srv/s/l/../mbox/x', '~/team/../mail', '../mail', 'mail/..', '..', './..']) {
+      const text = SMALL_TEAM.replace('operator: you', `operator: you\nmailbox: ${JSON.stringify(value)}`);
+      const shown = JSON.stringify(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expectFailAt(text, lineOf(text, 'mailbox:'), new RegExp(`mailbox ${shown} must not hold a \\.\\. part`));
+    }
+    // A name that only holds two dots, not a whole .. part, is fine.
+    for (const value of ['~/mail..box', '~/..hidden/mail', '~/mail/...']) {
+      const text = SMALL_TEAM.replace('operator: you', `operator: you\nmailbox: ${JSON.stringify(value)}`);
+      expect(errorsOf(text), value).toEqual([]);
+    }
+  });
+
   it('13: any failure spawns nothing', async () => {
     const env = makeTestEnv();
     const file = join(env.cwd, 'bad.yml');

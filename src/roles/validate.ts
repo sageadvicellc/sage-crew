@@ -24,6 +24,7 @@ import {
   type TaskProfile,
   type TransportSetting,
 } from './schema.ts';
+import { hasParentPart } from '../mailbox/folder.ts';
 import { hasControlCharacter, printable } from '../printable.ts';
 
 export interface RolesError {
@@ -384,7 +385,12 @@ export function validateRoles(text: string, options: ValidateOptions): ValidateR
     }
   }
 
-  const mailbox = checkOptionalString(c, root, 'mailbox', 1);
+  let mailbox = checkOptionalString(c, root, 'mailbox', 1);
+  if (mailbox !== undefined && hasParentPart(mailbox)) {
+    const pair = pairOf(root, 'mailbox');
+    if (pair) c.fail(keyNode(pair), `mailbox ${JSON.stringify(mailbox)} must not hold a .. part. Name the folder with no .. in it`, 1);
+    mailbox = undefined;
+  }
   const operator = checkOptionalString(c, root, 'operator', 1);
   const taskProfiles = checkTaskProfiles(c, root, bounds);
 
