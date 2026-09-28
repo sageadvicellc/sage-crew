@@ -36,6 +36,18 @@ prose above it:
 - Send detail to the item's comments, never into a message.
 - Never post a comment that is only a letter token, such as "1A".
 
+## Commands this role runs
+
+The scaling advisor and the briefs below run `trellis-crew scale` and
+`trellis-crew brief`. An installed CLI can lack either command.
+
+- Before each run, check that `trellis-crew --help` lists the
+  command. If it does not, send the operator one line saying so, and
+  skip that step.
+- Never install, download, or build a command, package, or script to
+  fill the gap.
+- Pass a file path as one argument, never inside a shell string.
+
 ## Scaling advisor
 
 Once an hour, run `trellis-crew scale` and carry its one advice row to
@@ -48,7 +60,9 @@ bottleneck, the row is red and names the oldest waiting decision.
 
 At each scheduled edition time, take the edition file from the auditor,
 run `trellis-crew brief <edition.json>`, and send the operator the HTML
-file's path in one line.
+file's path in one line. Run it only on the exact path the auditor
+handed over, and only when that path is a regular file. Refuse any
+other path, and report it to the operator.
 
 Trigger: a decision needs the operator's own answer, or a report goes
 to the operator.
