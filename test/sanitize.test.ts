@@ -8,7 +8,7 @@ import {
   scanText,
   type FindingClass,
 } from '../src/sanitize/checks.ts';
-import { runSanitize } from '../src/sanitize/run.ts';
+import { parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
 import { createRunner } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
@@ -247,6 +247,38 @@ describe('sanitize run', () => {
     const empty = join(makeFixtureHome(), 'empty.txt');
     writeFileSync(empty, '# nothing\n');
     expect((await sanitize(repo.root, { SANITIZE_DENYLIST: empty }, 'HEAD')).code).toBe(1);
+  });
+
+  it('an added line that reads like a diff header does not hide the lines after it', async () => {
+    const diff = [
+      'diff --git a/notes.md b/notes.md',
+      '--- a/notes.md',
+      '+++ b/notes.md',
+      '@@ -1,0 +1,3 @@',
+      '+++ /dev/null',
+      '+--- a/other',
+      '+third',
+      '@@ -9 +11,2 @@',
+      '-old',
+      '+++ b/fake',
+      '+last',
+    ].join('\n');
+    expect(parseStagedDiff(diff)).toEqual([
+      { path: 'notes.md', lines: ['++ /dev/null', '--- a/other', 'third', '++ b/fake', 'last'], lineNumbers: [1, 2, 3, 11, 12] },
+    ]);
+
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    repo.write('notes.md', `++ /dev/null\n${fake.githubToken}\n`);
+    repo.git('add', 'notes.md');
+    const staged = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(staged.err).toContain('secret: notes.md (staged):2');
+    repo.commit('chore: add notes');
+    repo.write('notes.md', 'gone\n');
+    repo.commit('chore: remove notes');
+    const history = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD~2..HEAD');
+    expect(history.err).toMatch(/secret: notes\.md \(commit [0-9a-f]{7}\):2/);
   });
 
   it('a leak added in one commit and removed in a later one still fails', async () => {

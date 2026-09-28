@@ -59,29 +59,50 @@ interface StagedFile {
   lineNumbers: number[];
 }
 
-/** Reads the added lines of a `git diff --unified=0` into files with real line numbers. */
+/**
+ * Reads the added lines of a `git diff --unified=0` into files with real
+ * line numbers. Each `@@` header gives the hunk's old and new line counts,
+ * so a line inside a hunk is always content, even one that reads like
+ * `+++ /dev/null`. A `+++` line counts as a file header only between hunks.
+ */
 export function parseStagedDiff(diff: string): StagedFile[] {
   const files: StagedFile[] = [];
   let current: StagedFile | undefined;
   let next = 0;
+  let oldLeft = 0;
+  let newLeft = 0;
   for (const line of diff.split('\n')) {
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith('+') && newLeft > 0) {
+        current?.lines.push(line.slice(1));
+        current?.lineNumbers.push(next);
+        next += 1;
+        newLeft -= 1;
+      } else if (line.startsWith('-') && oldLeft > 0) {
+        oldLeft -= 1;
+      } else if (line.startsWith(' ')) {
+        next += 1;
+        oldLeft -= 1;
+        newLeft -= 1;
+      }
+      // A `\ No newline at end of file` line counts toward neither side.
+      continue;
+    }
     if (line.startsWith('+++ ')) {
       const target = line.slice(4);
       current = target === '/dev/null' ? undefined : { path: target.replace(/^b\//, ''), lines: [], lineNumbers: [] };
       if (current) files.push(current);
       continue;
     }
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-    if (hunk) {
-      next = Number(hunk[1]);
+    if (line.startsWith('diff ')) {
+      current = undefined;
       continue;
     }
-    if (current && line.startsWith('+')) {
-      current.lines.push(line.slice(1));
-      current.lineNumbers.push(next);
-      next += 1;
-    } else if (line.startsWith(' ')) {
-      next += 1;
+    const hunk = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunk) {
+      oldLeft = hunk[1] === undefined ? 1 : Number(hunk[1]);
+      next = Number(hunk[2]);
+      newLeft = hunk[3] === undefined ? 1 : Number(hunk[3]);
     }
   }
   return files.filter((file) => file.lines.length > 0);
