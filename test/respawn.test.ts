@@ -101,6 +101,16 @@ describe('respawn', () => {
     expect(t.out.text()).toMatch(/now belongs to another process/);
   });
 
+  it('starts nothing when the old process cannot be checked', async () => {
+    const t = await started();
+    const old = entry(t, 'helper-a').pid as number;
+    t.runner.unknown.set(old, 'ps did not finish in time');
+    expect(await main(['respawn', 'helper-a'], t.deps)).toBe(1);
+    expect(t.runner.calls).toEqual([]);
+    expect(t.err.text()).toMatch(/cannot tell whether pid .* \(ps did not finish in time\)/);
+    expect(entry(t, 'helper-a').pid).toBe(old);
+  });
+
   it('56: a flag the harness cannot take prints the same warning as start', async () => {
     const t = claudeInstalled({ adapters: { 'claude-code': detachedAdapter('claude-code', {}) } });
     const file = writeRoles(t.env, 'team.yml', TEAM);

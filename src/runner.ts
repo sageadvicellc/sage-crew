@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 export interface RunOptions {
   cwd?: string;
@@ -30,29 +30,54 @@ export interface Runner {
   kill(pid: number, signal?: NodeJS.Signals): boolean;
   /** True when a process with this id exists. */
   alive(pid: number): boolean;
-  /** The process's start time as `ps` prints it, or undefined when no such process runs. */
-  startTime(pid: number): string | undefined;
+  /** The process's start time, whether no such process runs, or why neither could be read. */
+  startTime(pid: number): ProcessStart;
 }
 
 /**
- * Reads a process's start time with `ps -o lstart=`, which macOS and
- * Linux both carry at /bin/ps. The CLI records it next to each pid, so it
- * never signals a process that later took over a reused pid.
+ * A process's start time as `ps` reports it. `absent` means `ps` exited 1
+ * with no output, which is how it reports no such process. `unknown` is
+ * every other failure: the caller must not treat it as absent.
  */
-export function processStartTime(pid: number): string | undefined {
-  if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  try {
-    const text = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      env: { LC_ALL: 'C', PATH: '/bin:/usr/bin' },
-      timeout: 5000,
-    }).trim();
-    return text === '' ? undefined : text;
-  } catch {
-    // ps exits 1 when no process has this id.
-    return undefined;
+export type ProcessStart =
+  | { status: 'running'; started: string }
+  | { status: 'absent' }
+  | { status: 'unknown'; reason: string };
+
+export interface ProcessStartOptions {
+  /** The ps binary. macOS and Linux both carry it at /bin/ps. */
+  ps?: string;
+  timeoutMs?: number;
+}
+
+/**
+ * Reads a process's start time with `ps -o lstart=`. The CLI records it
+ * next to each pid, so it never signals a process that later took over a
+ * reused pid.
+ */
+export function processStartTime(pid: number, options: ProcessStartOptions = {}): ProcessStart {
+  if (!Number.isInteger(pid) || pid <= 0) return { status: 'unknown', reason: `${pid} is not a process id` };
+  const result = spawnSync(options.ps ?? '/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { LC_ALL: 'C', PATH: '/bin:/usr/bin' },
+    timeout: options.timeoutMs ?? 5000,
+  });
+  if (result.error) {
+    const code = 'code' in result.error ? String(result.error.code) : '';
+    const reason = code === 'ETIMEDOUT' ? 'ps did not finish in time' : `ps could not run: ${result.error.message}`;
+    return { status: 'unknown', reason };
   }
+  const text = (result.stdout ?? '').trim();
+  if (result.status === 0 && text !== '') return { status: 'running', started: text };
+  if (result.status === 1 && text === '') return { status: 'absent' };
+  const exit = result.status === null ? `signal ${String(result.signal)}` : `exit code ${result.status}`;
+  return { status: 'unknown', reason: `ps failed: ${exit}${text === '' ? ', no output' : ', unexpected output'}` };
+}
+
+/** The recorded start time, or undefined, from a ProcessStart. */
+export function startedOf(start: ProcessStart): string | undefined {
+  return start.status === 'running' ? start.started : undefined;
 }
 
 function childEnv(env: RunOptions['env']): NodeJS.ProcessEnv | undefined {

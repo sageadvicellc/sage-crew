@@ -107,7 +107,7 @@ describe('Codex CLI', () => {
     const pids = team.record.sessions.map((s) => s.pid as number);
     for (const pid of pids) expect(alive(pid)).toBe(true);
     // Each child's start time is recorded, so stop can tell a reused pid.
-    for (const entry of team.record.sessions) expect(entry.started).toBe(processStartTime(entry.pid as number));
+    for (const entry of team.record.sessions) expect(processStartTime(entry.pid as number)).toEqual({ status: 'running', started: entry.started });
     handle.stop();
     await handle.done;
     await waitFor(() => pids.every((pid) => !alive(pid)));

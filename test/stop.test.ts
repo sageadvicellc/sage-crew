@@ -48,6 +48,27 @@ describe('stop', () => {
     expect(t.out.text()).toMatch(/main: pid 4101 now belongs to another process, so it was not signalled/);
   });
 
+  it('a pid whose start time cannot be read is warned about, never signalled, and the record is kept', async () => {
+    const t = claudeInstalled();
+    for (const pid of [4101, 4102]) t.runner.living.add(pid);
+    t.runner.starts.set(4102, 'start-worker');
+    t.runner.unknown.set(4101, 'ps failed: exit code 2');
+    writeTeam(t.env, {
+      version: 1,
+      harness: 'codex',
+      sessions: [
+        { name: 'main', pid: 4101, session_id: null, started: 'start-main' },
+        { name: 'worker-1', pid: 4102, session_id: null, started: 'start-worker' },
+      ],
+    });
+    expect(await main(['stop'], t.deps)).toBe(1);
+    const kills = t.runner.calls.filter((c) => c.kind === 'kill').map((c) => Number(c.command));
+    expect(kills).toEqual([4102]);
+    expect(t.err.text()).toMatch(/main: cannot tell whether pid 4101 is the process the CLI started \(ps failed: exit code 2\)/);
+    expect(existsSync(teamJsonPath(t.env))).toBe(true);
+    expect(t.err.text()).toMatch(/Kept the team record/);
+  });
+
   it('start records each detached process start time, and the team record keeps it', async () => {
     const t = installedOn('qwen-code', 'native');
     expect(await main(['start'], t.deps)).toBe(0);

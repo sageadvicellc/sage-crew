@@ -1,4 +1,4 @@
-import type { RunOptions, RunResult, Runner } from '../../src/runner.ts';
+import type { ProcessStart, RunOptions, RunResult, Runner } from '../../src/runner.ts';
 
 export interface RecordedCall {
   kind: 'run' | 'detached' | 'kill';
@@ -15,6 +15,8 @@ export interface RecordingRunner extends Runner {
   living: Set<number>;
   /** The start time startTime() reports for each living pid. */
   starts: Map<number, string>;
+  /** Pids whose start time cannot be read, with the reason startTime() reports. */
+  unknown: Map<number, string>;
 }
 
 const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
@@ -23,11 +25,13 @@ export function recordingRunner(responder: Responder = () => ok): RecordingRunne
   const calls: RecordedCall[] = [];
   const living = new Set<number>();
   const starts = new Map<number, string>();
+  const unknown = new Map<number, string>();
   let nextPid = 40000;
   return {
     calls,
     living,
     starts,
+    unknown,
     async run(command: string, args: readonly string[], _options?: RunOptions): Promise<RunResult> {
       calls.push({ kind: 'run', command, args });
       return responder(command, args);
@@ -46,8 +50,11 @@ export function recordingRunner(responder: Responder = () => ok): RecordingRunne
     alive(pid: number): boolean {
       return living.has(pid);
     },
-    startTime(pid: number): string | undefined {
-      return living.has(pid) ? starts.get(pid) : undefined;
+    startTime(pid: number): ProcessStart {
+      const reason = unknown.get(pid);
+      if (reason !== undefined) return { status: 'unknown', reason };
+      const started = living.has(pid) ? starts.get(pid) : undefined;
+      return started === undefined ? { status: 'absent' } : { status: 'running', started };
     },
   };
 }

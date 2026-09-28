@@ -11,7 +11,7 @@ import {
 } from '../roles/schema.ts';
 import { readTeam, writeTeam } from '../store/team-json.ts';
 import { launchSession, loadForHarness, planLaunch } from './start.ts';
-import { noProcessLine, stopPid } from './stop.ts';
+import { noProcessLine, printStop, stopPid } from './stop.ts';
 
 export interface RespawnOptions {
   session: string;
@@ -108,7 +108,12 @@ export async function runRespawn(options: RespawnOptions, deps: CliDeps): Promis
     return EXIT_RUNTIME;
   }
 
-  deps.out(stopPid(entry.name, entry.pid, entry.started, deps));
+  const stopped = stopPid(entry.name, entry.pid, entry.started, deps);
+  printStop(stopped, deps);
+  if (stopped.kept) {
+    deps.err('Nothing was started, because the old process could not be checked.');
+    return EXIT_RUNTIME;
+  }
   const overrides: LaunchValues = {};
   if (options.autocompact !== undefined) overrides.autocompact = options.autocompact;
   if (options.model !== undefined) overrides.model = options.model;

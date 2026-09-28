@@ -6,11 +6,30 @@ import { makeFixtureHome } from './helpers/env.ts';
 import { fixtureBin } from './helpers/paths.ts';
 
 describe('process start time', () => {
-  it('reads a live process start time, and nothing for a gone one', () => {
+  it('reads a live process start time, and absent for a gone one', () => {
     const own = processStartTime(process.pid);
-    expect(own).toMatch(/\d/);
-    expect(processStartTime(process.pid)).toBe(own);
-    expect(processStartTime(2 ** 22 + 12345)).toBeUndefined();
+    expect(own).toMatchObject({ status: 'running', started: expect.stringMatching(/\d/) });
+    expect(processStartTime(process.pid)).toEqual(own);
+    expect(processStartTime(2 ** 22 + 12345)).toEqual({ status: 'absent' });
+  });
+
+  it('only exit 1 with no output means absent. Any other ps failure is unknown, never absent', () => {
+    const dir = makeFixtureHome();
+    const stub = (name: string, body: string): string => {
+      const path = join(dir, name);
+      writeFileSync(path, `#!/bin/sh\n${body}\n`);
+      chmodSync(path, 0o755);
+      return path;
+    };
+    expect(processStartTime(1234, { ps: stub('gone', 'exit 1') })).toEqual({ status: 'absent' });
+    expect(processStartTime(1234, { ps: stub('odd', 'exit 2') })).toMatchObject({ status: 'unknown', reason: expect.stringMatching(/exit code 2/) });
+    expect(processStartTime(1234, { ps: stub('noisy', 'echo junk; exit 1') })).toMatchObject({ status: 'unknown' });
+    expect(processStartTime(1234, { ps: stub('empty', 'exit 0') })).toMatchObject({ status: 'unknown' });
+    expect(processStartTime(1234, { ps: join(dir, 'missing') })).toMatchObject({ status: 'unknown' });
+    expect(processStartTime(1234, { ps: stub('slow', 'exec /bin/sleep 5'), timeoutMs: 200 })).toMatchObject({
+      status: 'unknown',
+      reason: expect.stringMatching(/time/),
+    });
   });
 });
 

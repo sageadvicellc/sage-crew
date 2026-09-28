@@ -12,6 +12,7 @@ import { loadTeam, type LoadOptions, type LoadResult } from '../roles/load.ts';
 import type { HarnessId, RolesConfig, Session, Transport } from '../roles/schema.ts';
 import { readInstallRecord } from '../store/install-yml.ts';
 import { readTeam, teamJsonPath, writeTeam, type TeamEntry, type TeamRecord, type TeamSource } from '../store/team-json.ts';
+import { startedOf } from '../runner.ts';
 import { resolveTransport } from '../transport.ts';
 
 /**
@@ -133,7 +134,7 @@ export async function launchSession(
   const item = prepareSession(config, session, plan, deps, overrides);
   const outcome = await plan.adapter.launch(item.name, item.kickoff, item.flagArgs, contextFor(plan, deps));
   if (outcome.ok && outcome.entry.pid !== null) {
-    const started = deps.runner.startTime(outcome.entry.pid);
+    const started = startedOf(deps.runner.startTime(outcome.entry.pid));
     if (started !== undefined) outcome.entry.started = started;
   }
   return outcome;
@@ -201,7 +202,7 @@ async function launchSupervised(config: RolesConfig, plan: LaunchPlan, record: T
     return EXIT_RUNTIME;
   }
   record.supervisor_pid = outcome.supervisorPid;
-  const started = deps.runner.startTime(outcome.supervisorPid);
+  const started = startedOf(deps.runner.startTime(outcome.supervisorPid));
   if (started !== undefined) record.supervisor_started = started;
   writeTeam(deps.env, record);
   deps.out(
