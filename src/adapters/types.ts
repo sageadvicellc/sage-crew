@@ -1,4 +1,5 @@
 import type { Env } from '../env.ts';
+import type { InboundTarget } from '../settings/inbound.ts';
 import type { HarnessId } from '../roles/schema.ts';
 import type { Runner } from '../runner.ts';
 import type { TeamEntry } from '../store/team-json.ts';
@@ -18,7 +19,11 @@ export interface AdapterContext {
 
 export type LaunchOutcome = { ok: true; entry: TeamEntry } | { ok: false; message: string };
 
-export type PluginOutcome = { ok: true } | { ok: false; message: string };
+/**
+ * The result of a plugin install or update. `skipped` marks a step that a
+ * documented gap blocks: the rest of the install still runs.
+ */
+export type PluginOutcome = { ok: true } | { ok: false; message: string; skipped?: boolean };
 
 /** What each harness adapter provides. */
 export interface Adapter {
@@ -34,4 +39,8 @@ export interface Adapter {
   installPlugin?(ctx: AdapterContext): Promise<PluginOutcome>;
   /** Updates the plugin through the harness. Unset: not built yet. */
   updatePlugin?(ctx: AdapterContext): Promise<PluginOutcome>;
+  /** The user settings file whose inbound setting install sets to accept, after a dated backup. */
+  inboundTarget?(env: Env): InboundTarget;
+  /** Extra status lines from the harness's own session list. */
+  statusLines?(ctx: AdapterContext): Promise<string[]>;
 }

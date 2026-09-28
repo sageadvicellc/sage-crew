@@ -17,6 +17,11 @@ export function claudeInboundTarget(env: Env): InboundTarget {
   return { settingsPath: join(claudeDir(env), 'settings.json'), keyPath: ['crossSessionInbound'] };
 }
 
+/** The Qwen Code user settings file, `~/.qwen/settings.json`, key `agents.crossSessionInbound`. */
+export function qwenInboundTarget(env: Env): InboundTarget {
+  return { settingsPath: join(env.home, '.qwen', 'settings.json'), keyPath: ['agents', 'crossSessionInbound'] };
+}
+
 export interface InboundOptions {
   /** The clock. The backup's date is this day in UTC. */
   now: Date;

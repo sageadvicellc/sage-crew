@@ -1,3 +1,4 @@
+import { claudeInboundTarget } from '../settings/inbound.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
 /**
@@ -82,4 +83,6 @@ export const claudeCodeAdapter: Adapter = {
   async updatePlugin(ctx) {
     return pluginCommand(ctx, ['update', CLAUDE_PLUGIN_ID]);
   },
+
+  inboundTarget: claudeInboundTarget,
 };

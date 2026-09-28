@@ -18,8 +18,17 @@ export interface Harnessed {
 
 /** A fixture home with Claude Code chosen at install, and a recording runner. */
 export function claudeInstalled(extra: Partial<CliDeps> = {}): Harnessed {
+  return installedOn('claude-code', 'native', extra);
+}
+
+/** A fixture home with a harness and transport chosen at install, and a recording runner. */
+export function installedOn(
+  harness: Adapter['id'],
+  transport: 'native' | 'a2a' | 'file-mailbox',
+  extra: Partial<CliDeps> = {},
+): Harnessed {
   const env = makeTestEnv();
-  writeInstallRecord(env, { harness: 'claude-code', transport: 'native', plugin_version: '0.1.0' });
+  writeInstallRecord(env, { harness, transport, plugin_version: '0.1.0' });
   const runner = recordingRunner();
   const out = capture();
   const err = capture();

@@ -1,17 +1,17 @@
 import { adapterFor } from '../adapters/index.ts';
 import type { TransportFlag } from '../args.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from '../deps.ts';
-import { claudeDir } from '../env.ts';
 import { confirmHarness, terminalAsk } from '../detect/confirm.ts';
 import { findBinary, HARNESSES, probeHarnesses, type HarnessInfo } from '../detect/probe.ts';
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam } from '../roles/load.ts';
 import type { Transport } from '../roles/schema.ts';
-import { claudeInboundTarget, setInboundAccept } from '../settings/inbound.ts';
+import { setInboundAccept } from '../settings/inbound.ts';
 import { readInstallRecord, writeInstallRecord } from '../store/install-yml.ts';
 import { resolveTransport } from '../transport.ts';
 import { bundledPluginVersion, cliVersion } from '../versions.ts';
 import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 export interface InstallOptions {
   harness?: string;
@@ -77,20 +77,26 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
     return EXIT_RUNTIME;
   } else {
     const installed = await adapter.installPlugin({ env: deps.env, runner: deps.runner, binaryPath });
-    if (!installed.ok) {
+    if (installed.ok) {
+      pluginVersion = bundledPluginVersion();
+      deps.out(`Installed the trellis-crew plugin ${pluginVersion} on ${harness.displayName}.`);
+    } else if (installed.skipped) {
+      deps.err(`No plugin was installed on ${harness.displayName}: ${installed.message}`);
+      complete = false;
+    } else {
       deps.err(`The plugin install failed: ${installed.message}`);
       return EXIT_RUNTIME;
     }
-    pluginVersion = bundledPluginVersion();
-    deps.out(`Installed the trellis-crew plugin ${pluginVersion} on ${harness.displayName}.`);
   }
 
-  if (harness.id === 'claude-code') {
-    if (!existsSync(claudeDir(deps.env))) {
-      deps.err(`The Claude Code configuration folder ${claudeDir(deps.env)} does not exist yet. Run Claude Code once, then run install again.`);
+  const target = adapter?.inboundTarget?.(deps.env);
+  if (target !== undefined) {
+    const folder = dirname(target.settingsPath);
+    if (!existsSync(folder)) {
+      deps.err(`The ${harness.displayName} configuration folder ${folder} does not exist yet. Run ${harness.displayName} once, then run install again.`);
       return EXIT_RUNTIME;
     }
-    const inbound = setInboundAccept(claudeInboundTarget(deps.env), { now: deps.now?.() ?? new Date(), out: deps.out });
+    const inbound = setInboundAccept(target, { now: deps.now?.() ?? new Date(), out: deps.out });
     if (!inbound.ok) {
       deps.err(inbound.message);
       return EXIT_RUNTIME;

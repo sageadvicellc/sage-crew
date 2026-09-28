@@ -1,5 +1,6 @@
+import { adapterFor } from '../adapters/index.ts';
 import { EXIT_OK, EXIT_RUNTIME, type CliDeps } from '../deps.ts';
-import { HARNESSES } from '../detect/probe.ts';
+import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { readTeam } from '../store/team-json.ts';
 
 /** Lists the team's sessions and their state from team.json. */
@@ -26,6 +27,12 @@ export async function runStatus(deps: CliDeps): Promise<number> {
     const state =
       entry.pid === null ? 'unknown, no local process recorded' : deps.runner.alive(entry.pid) ? 'running' : 'not running';
     deps.out(`${entry.name.padEnd(width)}  pid ${entry.pid ?? '-'}  session ${entry.session_id ?? '-'}  ${state}`);
+  }
+  const adapter = adapterFor(record.harness, deps.adapters);
+  const info = HARNESSES.find((h) => h.id === record.harness);
+  const binaryPath = info ? findBinary(info.binary, deps.env.path) : undefined;
+  if (adapter?.statusLines && binaryPath !== undefined) {
+    for (const line of await adapter.statusLines({ env: deps.env, runner: deps.runner, binaryPath })) deps.out(line);
   }
   return EXIT_OK;
 }

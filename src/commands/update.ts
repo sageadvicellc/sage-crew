@@ -69,6 +69,9 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
       if (updated.ok) {
         record.plugin_version = bundledPluginVersion();
         deps.out(`Updated the trellis-crew plugin to ${record.plugin_version} on ${name}.`);
+      } else if (updated.skipped) {
+        deps.err(`The plugin was not updated on ${name}: ${updated.message}`);
+        complete = false;
       } else {
         deps.err(`The plugin update failed: ${updated.message}`);
         complete = false;

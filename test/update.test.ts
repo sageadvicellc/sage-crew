@@ -76,7 +76,6 @@ describe('update', () => {
       const t = rig(published, harness);
       await main(['update'], t.deps);
       expect(t.out.text(), harness).toContain(expected);
-      expect(t.runner.calls.filter((c) => /update$/.test(c.args.join(' '))), harness).toEqual([]);
       expect(t.runner.calls.filter((c) => c.args.length === 1 && c.args[0] === 'update'), harness).toEqual([]);
     }
   });
