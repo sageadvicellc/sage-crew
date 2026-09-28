@@ -1,7 +1,36 @@
-import type { Adapter } from './types.ts';
+import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
+
+/**
+ * The GitHub repository that holds the Claude Code marketplace. A rename
+ * is this one line. Per https://code.claude.com/docs/en/plugin-marketplaces,
+ * retrieved 2026-09-28, a GitHub-hosted marketplace is added with
+ * `claude plugin marketplace add <owner>/<repo>`, and a plugin installs as
+ * `<plugin>@<marketplace name>`, where the name is the `name` field of the
+ * repository's marketplace.json. The maintainer set that field to the
+ * repository's own name, so the name is the part after the slash.
+ */
+export const CLAUDE_MARKETPLACE_REPO = 'sageadvicellc/sage-freebies';
+export const CLAUDE_MARKETPLACE_NAME = CLAUDE_MARKETPLACE_REPO.split('/')[1] as string;
+/** The plugin as Claude Code names it: `<plugin>@<marketplace name>`. */
+export const CLAUDE_PLUGIN_ID = `trellis-crew@${CLAUDE_MARKETPLACE_NAME}`;
 
 /** How long `claude --bg` may take to return before the launch counts as failed. */
 export const CLAUDE_LAUNCH_TIMEOUT_MS = 120_000;
+/** How long one `claude plugin` command may take. */
+export const CLAUDE_PLUGIN_TIMEOUT_MS = 300_000;
+
+async function pluginCommand(ctx: AdapterContext, args: readonly string[]): Promise<PluginOutcome> {
+  const result = await ctx.runner.run(ctx.binaryPath, ['plugin', ...args], {
+    env: ctx.env.vars,
+    cwd: ctx.env.cwd,
+    timeoutMs: CLAUDE_PLUGIN_TIMEOUT_MS,
+  });
+  if (result.code === 0) return { ok: true };
+  const reason = result.timedOut
+    ? 'it did not finish in time'
+    : result.error ?? (result.stderr.trim().split('\n')[0] || `exit code ${String(result.code)}`);
+  return { ok: false, message: `claude plugin ${args.join(' ')}: ${reason}` };
+}
 
 /**
  * Reads the session id from `claude --bg` output. Gap: the documentation
@@ -40,5 +69,17 @@ export const claudeCodeAdapter: Adapter = {
 
   noProcessNote(entry) {
     return `${entry.name}: Claude Code documents no command that stops a background session, so it still runs. Use the commands that claude --bg printed when it started.`;
+  },
+
+  async installPlugin(ctx) {
+    // Gap: the docs do not say whether adding a marketplace that is already
+    // added succeeds, so a failure here stops the install and prints why.
+    const added = await pluginCommand(ctx, ['marketplace', 'add', CLAUDE_MARKETPLACE_REPO]);
+    if (!added.ok) return added;
+    return pluginCommand(ctx, ['install', CLAUDE_PLUGIN_ID]);
+  },
+
+  async updatePlugin(ctx) {
+    return pluginCommand(ctx, ['update', CLAUDE_PLUGIN_ID]);
   },
 };
