@@ -129,7 +129,8 @@ function checkModel(c: Checker, node: AnyNode, model: string, where: string): bo
 }
 
 function checkTaskProfiles(c: Checker, map: YAMLMap, harness: HarnessId | undefined): Record<string, TaskProfile> {
-  const profiles: Record<string, TaskProfile> = {};
+  // No prototype, so a profile name can never reach Object.prototype.
+  const profiles = Object.create(null) as Record<string, TaskProfile>;
   const pair = pairOf(map, 'task_profiles');
   if (!pair || pair.value === null) return profiles;
   if (!isMap(pair.value)) {
@@ -139,6 +140,10 @@ function checkTaskProfiles(c: Checker, map: YAMLMap, harness: HarnessId | undefi
   for (const entry of pair.value.items) {
     const name = isScalar(entry.key) ? String(entry.key.value) : '';
     const at = keyNode(entry);
+    if (!NAME_PATTERN.test(name) || name in Object.prototype) {
+      c.fail(at, `task profile name "${name}" must use lowercase letters, digits, and hyphens, start with a letter, and not be a reserved name`);
+      continue;
+    }
     if (!isMap(entry.value)) {
       c.fail(at, `task profile "${name}" must set model, effort, or both`);
       continue;

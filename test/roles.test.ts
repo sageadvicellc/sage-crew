@@ -163,6 +163,17 @@ describe('roles file', () => {
     expect(errorsOf(indented).some((e) => /kickoff/.test(e.message))).toBe(true);
   });
 
+  it('a task profile name must be a plain name, so __proto__ never reaches an object prototype', () => {
+    for (const name of ['__proto__', 'constructor', 'Build', 'has space']) {
+      const text = SMALL_TEAM.replace('sessions:', `task_profiles:\n  "${name}": {model: model-a}\nsessions:`);
+      expectFailAt(text, lineOf(text, `"${name}":`), /task profile name/);
+    }
+    const ok = validateRoles(SMALL_TEAM.replace('sessions:', 'task_profiles:\n  build: {model: model-a}\nsessions:'), {});
+    if (!ok.ok) throw new Error('expected a valid file');
+    expect(Object.getPrototypeOf(ok.config.task_profiles)).toBeNull();
+    expect(ok.config.task_profiles.build).toEqual({ model: 'model-a' });
+  });
+
   it('13: any failure spawns nothing', async () => {
     const env = makeTestEnv();
     const file = join(env.cwd, 'bad.yml');
