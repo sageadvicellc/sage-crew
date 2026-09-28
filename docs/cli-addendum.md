@@ -235,7 +235,7 @@ message each:
 | `transport` | top | no | `auto`, `native`, `a2a`, `mcp-mailbox`, `file-mailbox` |
 | `mailbox` | top | no | folder for the mailbox transports |
 | `operator` | top | no | how kickoff messages name the person |
-| `sessions[].name` | session | yes | the session's address; lowercase, hyphens |
+| `sessions[].name` | session | yes | the session's address; lowercase letters, digits, and hyphens, starting with a letter |
 | `sessions[].role` | session | yes | `lead`, `standby`, `auditor`, `researcher`, `reporting-chain` |
 | `sessions[].reports_to` | session | yes | a session name or `operator` |
 | `sessions[].workers` | session | lead only | the names this lead owns |
