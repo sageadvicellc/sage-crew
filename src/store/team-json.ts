@@ -12,6 +12,8 @@ export interface TeamEntry {
   pid: number | null;
   /** The harness's own session or thread id, or null when none was read. */
   session_id: string | null;
+  /** The process's start time when the CLI recorded the pid, so a reused pid is never signalled. */
+  started?: string;
 }
 
 /** Where the team's layout came from, so respawn can read it again. */
@@ -32,6 +34,8 @@ export interface TeamRecord {
   mailbox?: string;
   /** The detached supervisor's process id, on harnesses that need one. */
   supervisor_pid?: number;
+  /** The supervisor's start time when the CLI recorded its pid. */
+  supervisor_started?: string;
   sessions: TeamEntry[];
 }
 
@@ -59,7 +63,8 @@ function isEntry(value: unknown): value is TeamEntry {
   return (
     typeof entry.name === 'string' &&
     (entry.pid === null || isPid(entry.pid)) &&
-    (entry.session_id === null || typeof entry.session_id === 'string')
+    (entry.session_id === null || typeof entry.session_id === 'string') &&
+    (entry.started === undefined || typeof entry.started === 'string')
   );
 }
 
@@ -88,6 +93,7 @@ export function readTeamFile(path: string): ReadResult<TeamRecord> {
     !Array.isArray(record.sessions) ||
     !record.sessions.every(isEntry) ||
     (record.supervisor_pid !== undefined && !isPid(record.supervisor_pid)) ||
+    (record.supervisor_started !== undefined && typeof record.supervisor_started !== 'string') ||
     (record.transport !== undefined && (record.transport === ('auto' as string) || !(TRANSPORTS as readonly string[]).includes(record.transport))) ||
     (record.roles !== undefined && !isSource(record.roles)) ||
     (record.mailbox !== undefined && typeof record.mailbox !== 'string')
@@ -97,8 +103,14 @@ export function readTeamFile(path: string): ReadResult<TeamRecord> {
   const out: TeamRecord = {
     version: 1,
     harness: record.harness,
-    sessions: record.sessions.map((s) => ({ name: s.name, pid: s.pid, session_id: s.session_id })),
+    sessions: record.sessions.map((s) => ({
+      name: s.name,
+      pid: s.pid,
+      session_id: s.session_id,
+      ...(s.started === undefined ? {} : { started: s.started }),
+    })),
   };
+  if (record.supervisor_started !== undefined) out.supervisor_started = record.supervisor_started;
   if (record.transport !== undefined) out.transport = record.transport;
   if (record.roles !== undefined) out.roles = record.roles;
   if (record.mailbox !== undefined) out.mailbox = record.mailbox;

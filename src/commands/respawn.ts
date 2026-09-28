@@ -11,7 +11,7 @@ import {
 } from '../roles/schema.ts';
 import { readTeam, writeTeam } from '../store/team-json.ts';
 import { launchSession, loadForHarness, planLaunch } from './start.ts';
-import { noProcessLine } from './stop.ts';
+import { noProcessLine, stopPid } from './stop.ts';
 
 export interface RespawnOptions {
   session: string;
@@ -108,7 +108,7 @@ export async function runRespawn(options: RespawnOptions, deps: CliDeps): Promis
     return EXIT_RUNTIME;
   }
 
-  deps.out(deps.runner.kill(entry.pid, 'SIGTERM') ? `Stopped ${entry.name} (pid ${entry.pid}).` : `${entry.name} (pid ${entry.pid}) was not running.`);
+  deps.out(stopPid(entry.name, entry.pid, entry.started, deps));
   const overrides: LaunchValues = {};
   if (options.autocompact !== undefined) overrides.autocompact = options.autocompact;
   if (options.model !== undefined) overrides.model = options.model;

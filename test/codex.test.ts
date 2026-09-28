@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
 import { main } from '../src/cli.ts';
+import { processStartTime } from '../src/runner.ts';
 import { readTeam, readTeamFile, writeTeamFile } from '../src/store/team-json.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { fixtureBin, repoRoot } from './helpers/paths.ts';
@@ -92,6 +93,8 @@ describe('Codex CLI', () => {
     if (!team.ok || !team.record) throw new Error('no team');
     const pids = team.record.sessions.map((s) => s.pid as number);
     for (const pid of pids) expect(alive(pid)).toBe(true);
+    // Each child's start time is recorded, so stop can tell a reused pid.
+    for (const entry of team.record.sessions) expect(entry.started).toBe(processStartTime(entry.pid as number));
     handle.stop();
     await handle.done;
     await waitFor(() => pids.every((pid) => !alive(pid)));

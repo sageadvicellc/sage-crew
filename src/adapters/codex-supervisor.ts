@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { processStartTime } from '../runner.ts';
 import { readTeamFile, writeTeamFile } from '../store/team-json.ts';
 
 /** What the CLI hands the supervisor: the binary, the folder, the team record, and each session's arguments. */
@@ -34,6 +35,8 @@ function recordPid(teamPath: string, name: string, pid: number): void {
   const entry = team.record.sessions.find((s) => s.name === name);
   if (!entry) return;
   entry.pid = pid;
+  const started = processStartTime(pid);
+  if (started !== undefined) entry.started = started;
   writeTeamFile(teamPath, team.record);
 }
 

@@ -92,6 +92,15 @@ describe('respawn', () => {
     expect(t.err.text()).toMatch(/nobody/);
   });
 
+  it('never signals a recorded pid that now belongs to another process', async () => {
+    const t = await started();
+    const old = entry(t, 'helper-a').pid as number;
+    t.runner.starts.set(old, 'fixture-start-someone-else');
+    expect(await main(['respawn', 'helper-a'], t.deps)).toBe(0);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill')).toEqual([]);
+    expect(t.out.text()).toMatch(/now belongs to another process/);
+  });
+
   it('56: a flag the harness cannot take prints the same warning as start', async () => {
     const t = claudeInstalled({ adapters: { 'claude-code': detachedAdapter('claude-code', {}) } });
     const file = writeRoles(t.env, 'team.yml', TEAM);

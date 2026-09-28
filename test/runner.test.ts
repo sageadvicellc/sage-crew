@@ -1,9 +1,18 @@
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createRunner } from '../src/runner.ts';
+import { createRunner, processStartTime } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { fixtureBin } from './helpers/paths.ts';
+
+describe('process start time', () => {
+  it('reads a live process start time, and nothing for a gone one', () => {
+    const own = processStartTime(process.pid);
+    expect(own).toMatch(/\d/);
+    expect(processStartTime(process.pid)).toBe(own);
+    expect(processStartTime(2 ** 22 + 12345)).toBeUndefined();
+  });
+});
 
 describe('runner', () => {
   const runner = createRunner();

@@ -13,6 +13,8 @@ export interface RecordingRunner extends Runner {
   calls: RecordedCall[];
   /** Process ids that alive() reports as running. */
   living: Set<number>;
+  /** The start time startTime() reports for each living pid. */
+  starts: Map<number, string>;
 }
 
 const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
@@ -20,10 +22,12 @@ const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
 export function recordingRunner(responder: Responder = () => ok): RecordingRunner {
   const calls: RecordedCall[] = [];
   const living = new Set<number>();
+  const starts = new Map<number, string>();
   let nextPid = 40000;
   return {
     calls,
     living,
+    starts,
     async run(command: string, args: readonly string[], _options?: RunOptions): Promise<RunResult> {
       calls.push({ kind: 'run', command, args });
       return responder(command, args);
@@ -32,6 +36,7 @@ export function recordingRunner(responder: Responder = () => ok): RecordingRunne
       calls.push({ kind: 'detached', command, args });
       nextPid += 1;
       living.add(nextPid);
+      starts.set(nextPid, `fixture-start-${nextPid}`);
       return { pid: nextPid };
     },
     kill(pid: number, signal: NodeJS.Signals = 'SIGTERM'): boolean {
@@ -40,6 +45,9 @@ export function recordingRunner(responder: Responder = () => ok): RecordingRunne
     },
     alive(pid: number): boolean {
       return living.has(pid);
+    },
+    startTime(pid: number): string | undefined {
+      return living.has(pid) ? starts.get(pid) : undefined;
     },
   };
 }

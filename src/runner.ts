@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 export interface RunOptions {
   cwd?: string;
@@ -30,6 +30,29 @@ export interface Runner {
   kill(pid: number, signal?: NodeJS.Signals): boolean;
   /** True when a process with this id exists. */
   alive(pid: number): boolean;
+  /** The process's start time as `ps` prints it, or undefined when no such process runs. */
+  startTime(pid: number): string | undefined;
+}
+
+/**
+ * Reads a process's start time with `ps -o lstart=`, which macOS and
+ * Linux both carry at /bin/ps. The CLI records it next to each pid, so it
+ * never signals a process that later took over a reused pid.
+ */
+export function processStartTime(pid: number): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try {
+    const text = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { LC_ALL: 'C', PATH: '/bin:/usr/bin' },
+      timeout: 5000,
+    }).trim();
+    return text === '' ? undefined : text;
+  } catch {
+    // ps exits 1 when no process has this id.
+    return undefined;
+  }
 }
 
 function childEnv(env: RunOptions['env']): NodeJS.ProcessEnv | undefined {
@@ -142,5 +165,7 @@ export function createRunner(): Runner {
         return error instanceof Error && 'code' in error && error.code === 'EPERM';
       }
     },
+
+    startTime: processStartTime,
   };
 }

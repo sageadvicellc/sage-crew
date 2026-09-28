@@ -3,8 +3,17 @@ import { adapterFor } from '../adapters/index.ts';
 import { EXIT_OK, EXIT_RUNTIME, type CliDeps } from '../deps.ts';
 import { readTeam, teamJsonPath, type TeamEntry } from '../store/team-json.ts';
 
-/** Ends one recorded process. Returns the line to print. */
-export function stopPid(label: string, pid: number, deps: CliDeps): string {
+/**
+ * Ends one recorded process. Returns the line to print. When the record
+ * holds the process's start time and the pid now shows another one, the
+ * pid was reused, so nothing is signalled.
+ */
+export function stopPid(label: string, pid: number, started: string | undefined, deps: CliDeps): string {
+  if (started !== undefined) {
+    const now = deps.runner.startTime(pid);
+    if (now === undefined) return `${label} (pid ${pid}) was not running.`;
+    if (now !== started) return `${label}: pid ${pid} now belongs to another process, so it was not signalled.`;
+  }
   return deps.runner.kill(pid, 'SIGTERM') ? `Stopped ${label} (pid ${pid}).` : `${label} (pid ${pid}) was not running.`;
 }
 
@@ -32,9 +41,11 @@ export async function runStop(deps: CliDeps): Promise<number> {
     return EXIT_OK;
   }
   const { record } = team;
-  if (record.supervisor_pid !== undefined) deps.out(stopPid('the supervisor', record.supervisor_pid, deps));
+  if (record.supervisor_pid !== undefined) {
+    deps.out(stopPid('the supervisor', record.supervisor_pid, record.supervisor_started, deps));
+  }
   for (const entry of record.sessions) {
-    deps.out(entry.pid === null ? noProcessLine(record.harness, entry, deps) : stopPid(entry.name, entry.pid, deps));
+    deps.out(entry.pid === null ? noProcessLine(record.harness, entry, deps) : stopPid(entry.name, entry.pid, entry.started, deps));
   }
   rmSync(teamJsonPath(deps.env), { force: true });
   deps.out(`Removed the team record ${teamJsonPath(deps.env)}.`);

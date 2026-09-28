@@ -129,7 +129,12 @@ export async function launchSession(
   overrides: LaunchValues = {},
 ): Promise<{ ok: true; entry: TeamEntry } | { ok: false; message: string }> {
   const item = prepareSession(config, session, plan, deps, overrides);
-  return plan.adapter.launch(item.name, item.kickoff, item.flagArgs, contextFor(plan, deps));
+  const outcome = await plan.adapter.launch(item.name, item.kickoff, item.flagArgs, contextFor(plan, deps));
+  if (outcome.ok && outcome.entry.pid !== null) {
+    const started = deps.runner.startTime(outcome.entry.pid);
+    if (started !== undefined) outcome.entry.started = started;
+  }
+  return outcome;
 }
 
 function describeEntry(entry: TeamEntry): string {
@@ -194,6 +199,8 @@ async function launchSupervised(config: RolesConfig, plan: LaunchPlan, record: T
     return EXIT_RUNTIME;
   }
   record.supervisor_pid = outcome.supervisorPid;
+  const started = deps.runner.startTime(outcome.supervisorPid);
+  if (started !== undefined) record.supervisor_started = started;
   writeTeam(deps.env, record);
   deps.out(
     `Started the supervisor (pid ${outcome.supervisorPid}). It starts ${items.length} sessions on ${plan.adapter.displayName} and records each pid.`,
