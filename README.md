@@ -56,14 +56,19 @@ leave the file alone. With no terminal and neither flag, install leaves
 the file alone and exits 1. Before it writes, install copies the file to
 a dated backup beside it, and it prints both paths.
 
+For the file mailbox, install reads the mailbox folder from
+`./sagespec.yml` when that file is in the current folder. It shows the
+file first and asks, as `start` does. `--yes` skips the question.
+
 ### Run your team
 
 1. Write your roles file. Copy `sagespec.example.yml` to `sagespec.yml`
    and change it. With no roles file, the CLI starts the default team.
 2. Run `trellis-crew start`. It reads `./sagespec.yml`. Pass
    `--roles <file>` to read another file. When `start` finds
-   `./sagespec.yml` on its own, it prints the file's path and each
-   kickoff message, and it asks before it starts anything. A cloned
+   `./sagespec.yml` on its own, it prints the file's path, the
+   transport, the mailbox folder, and each kickoff message and model.
+   Then it asks before it starts anything. A cloned
    folder can hold another author's prompts. Add `--yes` to skip the
    question in a script. With no terminal and no `--yes`, it starts
    nothing.
@@ -79,7 +84,9 @@ To restart one session with new settings, run
 `trellis-crew respawn <name>`. It takes `--model`, `--effort`, and
 `--autocompact`. A flag that you leave out keeps the value from the
 roles file. The session starts again with an empty context. So run it
-only between units of work.
+only between units of work. When the roles file changed since `start`,
+respawn shows it and asks again before it stops anything. Add `--yes`
+to skip the question.
 
 To check for a newer CLI and update the plugin, run
 `trellis-crew update`. Add `--check` to change nothing. The CLI prints

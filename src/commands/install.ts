@@ -5,10 +5,11 @@ import { confirmHarness, terminalAsk } from '../detect/confirm.ts';
 import { findBinary, HARNESSES, probeHarnesses, type HarnessInfo } from '../detect/probe.ts';
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam } from '../roles/load.ts';
-import type { Transport } from '../roles/schema.ts';
+import type { RolesConfig, Transport } from '../roles/schema.ts';
 import { setInboundAccept, type InboundTarget } from '../settings/inbound.ts';
 import { readInstallRecord, writeInstallRecord } from '../store/install-yml.ts';
 import { resolveTransport } from '../transport.ts';
+import { confirmFoundRoles } from './start.ts';
 import { bundledPluginVersion, cliVersion } from '../versions.ts';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -99,6 +100,29 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
     return EXIT_USAGE;
   }
 
+  // The file mailbox folder comes from ./sagespec.yml when one is here. A
+  // cloned folder can hold another author's roles file, so it is shown and
+  // confirmed, as start does, before anything is written.
+  let roles: Pick<RolesConfig, 'mailbox'> = {};
+  if (transport === 'file-mailbox') {
+    const found = loadTeam({ env: deps.env });
+    if (!found.ok) {
+      for (const line of found.lines) deps.err(line);
+      return EXIT_USAGE;
+    }
+    if (found.file !== null) {
+      const asking = { ...deps, env: { ...deps.env, stdinIsTTY: deps.env.stdinIsTTY && !options.nonInteractive } };
+      const stop = await confirmFoundRoles(found.file, found.config, options.yes === true, asking, {
+        heading: 'Roles file found in this folder',
+        question: 'Use this roles file? [y/N] ',
+        noTerminal: 'No terminal can confirm this roles file. Read it, then run install again with --yes.',
+        declined: 'Nothing was installed.',
+      });
+      if (stop !== undefined) return stop;
+    }
+    roles = found.config;
+  }
+
   let complete = true;
   let pluginVersion: string | null = null;
   const adapter = adapterFor(harness.id, deps.adapters);
@@ -146,8 +170,7 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
   deps.out(`Recorded ${harness.displayName} with the ${transport} transport in install.yml.`);
 
   if (transport === 'file-mailbox') {
-    const team = loadTeam({ env: deps.env });
-    const folder = ensureMailboxFolder(mailboxPath(team.ok ? team.config : {}, deps.env));
+    const folder = ensureMailboxFolder(mailboxPath(roles, deps.env));
     if (!folder.ok) {
       deps.err(folder.message);
       return EXIT_RUNTIME;

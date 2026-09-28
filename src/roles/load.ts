@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { Env } from '../env.ts';
@@ -21,7 +22,7 @@ export interface LoadOptions {
 }
 
 export type LoadResult =
-  | { ok: true; config: RolesConfig; source: string; file: string | null }
+  | { ok: true; config: RolesConfig; source: string; file: string | null; sha256: string | null }
   | { ok: false; code: 2; lines: string[] };
 
 function failure(...lines: string[]): LoadResult {
@@ -47,6 +48,7 @@ export function loadTeam(options: LoadOptions): LoadResult {
       }),
       source: 'the default team',
       file: null,
+      sha256: null,
     };
   }
 
@@ -64,8 +66,9 @@ export function loadTeam(options: LoadOptions): LoadResult {
   if (!result.ok) {
     return failure(...formatRolesErrors(result.errors, text, file), 'Nothing was started.');
   }
-  if (options.workers === undefined) return { ok: true, config: result.config, source: file, file };
+  const sha256 = createHash('sha256').update(text).digest('hex');
+  if (options.workers === undefined) return { ok: true, config: result.config, source: file, file, sha256 };
   const applied = applyWorkers(result.config, options.workers);
   if (!applied.ok) return failure(`${file}: ${applied.message}`, 'Nothing was started.');
-  return { ok: true, config: applied.config, source: file, file };
+  return { ok: true, config: applied.config, source: file, file, sha256 };
 }

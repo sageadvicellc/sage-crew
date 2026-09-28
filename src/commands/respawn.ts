@@ -10,7 +10,7 @@ import {
   type HarnessId,
 } from '../roles/schema.ts';
 import { readTeam, writeTeam } from '../store/team-json.ts';
-import { launchSession, loadForHarness, planLaunch } from './start.ts';
+import { confirmFoundRoles, launchSession, loadForHarness, planLaunch } from './start.ts';
 import { noProcessLine, printStop, stopPid } from './stop.ts';
 
 export interface RespawnOptions {
@@ -18,6 +18,8 @@ export interface RespawnOptions {
   model?: string;
   effort?: string;
   autocompact?: string;
+  /** --yes: use a roles file that changed since start with no question. */
+  yes?: boolean;
 }
 
 /** Checks the flag values against the harness's bounds. Returns the problems found. */
@@ -100,6 +102,18 @@ export async function runRespawn(options: RespawnOptions, deps: CliDeps): Promis
     deps.err(`The roles file no longer holds a session named "${options.session}". Nothing was stopped.`);
     return EXIT_USAGE;
   }
+  // The file may have changed since the operator confirmed it at start. A
+  // changed file is shown and confirmed again before anything stops.
+  const changed = loaded.file !== null && loaded.sha256 !== source.sha256;
+  if (changed && loaded.file !== null) {
+    const stop = await confirmFoundRoles(loaded.file, config, options.yes === true, deps, {
+      heading: 'The roles file changed since start',
+      question: `Respawn ${options.session} from the changed file? [y/N] `,
+      noTerminal: 'No terminal can confirm the changed roles file. Read it, then run respawn again with --yes.',
+      declined: 'Nothing was stopped or started.',
+    });
+    if (stop !== undefined) return stop;
+  }
   const planned = planLaunch(config, deps);
   if (!planned.ok) return planned.code;
   if (entry.pid === null) {
@@ -126,6 +140,8 @@ export async function runRespawn(options: RespawnOptions, deps: CliDeps): Promis
     return EXIT_RUNTIME;
   }
   record.sessions[index] = outcome.entry;
+  // The confirmed file is the new baseline for the next respawn.
+  if (changed && loaded.sha256 !== null) record.roles = { ...source, sha256: loaded.sha256 };
   writeTeam(deps.env, record);
   const pid = outcome.entry.pid === null ? '' : ` (pid ${outcome.entry.pid})`;
   deps.out(`Started ${entry.name} again${pid}. The new flags last until the next respawn or stop.`);

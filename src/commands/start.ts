@@ -7,7 +7,7 @@ import { terminalAsk } from '../detect/confirm.ts';
 import { printable } from '../printable.ts';
 import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { composeKickoff } from '../kickoff/compose.ts';
-import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
+import { DEFAULT_MAILBOX, ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam, type LoadOptions, type LoadResult } from '../roles/load.ts';
 import type { HarnessId, RolesConfig, Session, Transport } from '../roles/schema.ts';
 import { readInstallRecord } from '../store/install-yml.ts';
@@ -34,22 +34,60 @@ export function loadForHarness(options: Omit<LoadOptions, 'harness'>, deps: CliD
  * silently. `--yes` skips the question. With no terminal and no `--yes`,
  * it refuses. Returns an exit code to stop with, or undefined to go on.
  */
-export async function confirmFoundRoles(file: string, config: RolesConfig, yes: boolean, deps: CliDeps): Promise<number | undefined> {
-  // Every printed value is escaped, so a control character cannot hide text.
-  deps.out(`Roles file found in this folder: ${printable(file)}`);
+export async function confirmFoundRoles(
+  file: string,
+  config: RolesConfig,
+  yes: boolean,
+  deps: CliDeps,
+  wording: RolesConfirmWording = {
+    heading: 'Roles file found in this folder',
+    question: `Start ${config.sessions.length} sessions from this file? [y/N] `,
+    noTerminal: 'No terminal can confirm this roles file. Read it, then run again with --yes, or pass --roles <file>.',
+    declined: 'Nothing was started.',
+  },
+): Promise<number | undefined> {
+  showRoles(file, config, wording.heading, deps);
+  if (yes) return undefined;
+  if (!deps.env.stdinIsTTY) {
+    deps.err(wording.noTerminal);
+    return EXIT_USAGE;
+  }
+  const answer = (await (deps.ask ?? terminalAsk())(wording.question)).trim().toLowerCase();
+  if (answer === 'y' || answer === 'yes') return undefined;
+  deps.err(wording.declined);
+  return EXIT_RUNTIME;
+}
+
+/** The lines a roles-file confirm prints and asks. */
+export interface RolesConfirmWording {
+  heading: string;
+  question: string;
+  noTerminal: string;
+  declined: string;
+}
+
+/**
+ * Prints what a roles file will do: the harness, the transport, the
+ * mailbox folder, each task profile, and each session's kickoff and
+ * launch values. Every value is escaped, so a control character cannot
+ * hide text.
+ */
+function showRoles(file: string, config: RolesConfig, heading: string, deps: CliDeps): void {
+  deps.out(`${heading}: ${printable(file)}`);
+  deps.out(`harness: ${config.harness}`);
+  deps.out(`transport: ${config.transport}`);
+  deps.out(`mailbox: ${printable(config.mailbox ?? `${DEFAULT_MAILBOX} (the default)`)}`);
+  for (const [name, profile] of Object.entries(config.task_profiles)) {
+    const parts = [profile.model === undefined ? '' : `model ${profile.model}`, profile.effort === undefined ? '' : `effort ${profile.effort}`];
+    deps.out(printable(`task profile ${name}: ${parts.filter((p) => p !== '').join(', ')}`));
+  }
   for (const session of config.sessions) {
     deps.out(`${printable(session.name)}:`);
     for (const line of session.kickoff.trimEnd().split('\n')) deps.out(`  ${printable(line)}`);
+    if (session.model !== undefined) deps.out(`  model: ${printable(session.model)}`);
+    if (session.effort !== undefined) deps.out(`  effort: ${printable(session.effort)}`);
+    if (session.autocompact !== undefined) deps.out(`  autocompact: ${printable(session.autocompact)}`);
   }
-  if (yes) return undefined;
-  if (!deps.env.stdinIsTTY) {
-    deps.err('No terminal can confirm this roles file. Read it, then run again with --yes, or pass --roles <file>.');
-    return EXIT_USAGE;
-  }
-  const answer = (await (deps.ask ?? terminalAsk())(`Start ${config.sessions.length} sessions from this file? [y/N] `)).trim().toLowerCase();
-  if (answer === 'y' || answer === 'yes') return undefined;
-  deps.err('Nothing was started.');
-  return EXIT_RUNTIME;
 }
 
 export interface LaunchPlan {

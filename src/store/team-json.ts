@@ -21,6 +21,8 @@ export interface TeamEntry {
 export interface TeamSource {
   /** The roles file's absolute path, or null for the default team. */
   file: string | null;
+  /** The SHA-256 of the roles file the operator confirmed, so respawn can tell when it changed. */
+  sha256?: string;
   workers?: number;
   merge_reporters?: boolean;
 }
@@ -53,6 +55,7 @@ function isSource(value: unknown): value is TeamSource {
   const source = value as Record<string, unknown>;
   return (
     (source.file === null || typeof source.file === 'string') &&
+    (source.sha256 === undefined || (typeof source.sha256 === 'string' && /^[0-9a-f]{64}$/.test(source.sha256))) &&
     (source.workers === undefined || isPid(source.workers)) &&
     (source.merge_reporters === undefined || typeof source.merge_reporters === 'boolean')
   );

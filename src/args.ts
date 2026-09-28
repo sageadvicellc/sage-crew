@@ -21,7 +21,7 @@ export type Command =
   | { name: 'start'; workers?: number; roles?: string; mergeReporters: boolean; yes: boolean }
   | { name: 'status' }
   | { name: 'stop' }
-  | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string };
+  | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string; yes?: boolean };
 
 export type ParseResult = { ok: true; command: Command } | { ok: false; message: string };
 
@@ -31,7 +31,7 @@ export const USAGE = `Usage:
   trellis-crew start [--workers N] [--roles sagespec.yml] [--merge-reporters] [--yes]
   trellis-crew status
   trellis-crew stop
-  trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N]
+  trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N] [--yes]
   trellis-crew --roles sagespec.yml    (shorthand for start with a roles file)`;
 
 // No mcp-mailbox: this build carries the file mailbox only (plan decision 16).
@@ -121,11 +121,13 @@ function parseRespawn(args: string[]): ParseResult {
       model: { type: 'string' },
       effort: { type: 'string' },
       autocompact: { type: 'string' },
+      yes: { type: 'boolean', short: 'y', default: false },
     },
     true,
   );
   if (positionals.length !== 1) return { ok: false, message: 'respawn takes exactly one session name' };
   const command: Extract<Command, { name: 'respawn' }> = { name: 'respawn', session: positionals[0] as string };
+  if (values.yes === true) command.yes = true;
   if (typeof values.model === 'string') command.model = values.model;
   if (typeof values.effort === 'string') command.effort = values.effort;
   if (typeof values.autocompact === 'string') command.autocompact = values.autocompact;

@@ -62,6 +62,7 @@ async function dispatch(command: Command, deps: CliDeps): Promise<number> {
       }
       const source = {
         file: loaded.file,
+        ...(loaded.sha256 === null ? {} : { sha256: loaded.sha256 }),
         ...(command.workers === undefined ? {} : { workers: command.workers }),
         ...(command.mergeReporters ? { merge_reporters: true } : {}),
       };
