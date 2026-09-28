@@ -1,9 +1,9 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, isAbsolute, join, relative } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { main } from '../src/cli.ts';
 import { confirmHarness } from '../src/detect/confirm.ts';
-import { HARNESSES, probeHarnesses, sortCandidates, type Candidate } from '../src/detect/probe.ts';
+import { findBinary, HARNESSES, probeHarnesses, sortCandidates, type Candidate } from '../src/detect/probe.ts';
 import { createRunner } from '../src/runner.ts';
 import { makeFixtureHome, makeTestEnv } from './helpers/env.ts';
 import { capture } from './helpers/io.ts';
@@ -109,6 +109,15 @@ describe('detection', () => {
     const out = capture();
     await main(['install', '--non-interactive'], { env, runner: throwing, out: out.write, err: err.write });
     expect(err.text()).toMatch(/warning: .*--version.*spawn exploded/);
+  });
+
+  it('a relative PATH entry is skipped, because it depends on the current folder', () => {
+    const dir = stubDir({ claude: 'echo 1.0.0' });
+    const relativeDir = relative(process.cwd(), dir);
+    expect(isAbsolute(relativeDir)).toBe(false);
+    expect(findBinary('claude', relativeDir)).toBeUndefined();
+    expect(findBinary('claude', `.${delimiter}${relativeDir}`)).toBeUndefined();
+    expect(findBinary('claude', `${relativeDir}${delimiter}${dir}`)).toBe(join(dir, 'claude'));
   });
 
   it('24: candidates sort by tier, then by hits', async () => {

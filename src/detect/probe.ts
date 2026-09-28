@@ -1,5 +1,5 @@
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { claudeDir, codexDir, type Env } from '../env.ts';
 import type { HarnessId } from '../roles/schema.ts';
 import type { Runner } from '../runner.ts';
@@ -101,10 +101,12 @@ export interface ProbeOptions {
 
 export const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 
-/** Finds an executable file named `name` on the Env's PATH. */
+/** Finds an executable file named `name` in the absolute folders on the Env's PATH. */
 export function findBinary(name: string, path: string): string | undefined {
   for (const dir of path.split(delimiter)) {
-    if (dir === '') continue;
+    // An empty or relative entry resolves against the current folder, which a
+    // cloned project controls. Only absolute folders are searched.
+    if (dir === '' || !isAbsolute(dir)) continue;
     const candidate = join(dir, name);
     try {
       if (statSync(candidate).isFile()) {
