@@ -15,6 +15,115 @@ for a reader who runs no server. This folder holds draft skills and a
 manifest, not yet an installed plugin. The code's permanent home is a
 decision still open on the build issue.
 
+## Use the CLI
+
+The `trellis-crew` command line tool installs the plugin on your harness
+and starts, lists, and stops your team. A harness is the agent tool that
+runs each session, such as Claude Code or Codex CLI.
+
+### Get the CLI
+
+You need Node.js 24 or later. When the package is on npm, install it
+with `npm install -g trellis-crew`. From a clone of this repository, run
+these commands in its folder:
+
+```
+npm ci
+npm run build
+npm link
+```
+
+### Set it up once
+
+Run `trellis-crew install`. The CLI looks for each harness it knows and
+asks you to confirm the one it found. Then it installs the plugin on that
+harness and writes your choice to `~/.trellis-crew/install.yml`.
+
+- `--harness <name>` picks the harness and skips the search. The names
+  are `claude-code`, `qwen-code`, `hermes`, `codex`, `amp`, and
+  `opencode`.
+- `--transport <name>` picks how sessions send messages. The names are
+  `native`, `a2a`, and `file`.
+- `--non-interactive` asks no question. It takes the best candidate.
+- `--reconfigure` asks again, even when `install.yml` holds a choice.
+
+On Claude Code and Qwen Code, install also sets your user settings file
+to accept messages from other sessions. It first copies the file to a
+dated backup beside it, and it prints both paths.
+
+### Run your team
+
+1. Write your roles file. Copy `sagespec.example.yml` to `sagespec.yml`
+   and change it. With no roles file, the CLI starts the default team.
+2. Run `trellis-crew start`. It reads `./sagespec.yml`. Pass
+   `--roles <file>` to read another file.
+3. Run `trellis-crew status` to list each session and its state.
+4. Run `trellis-crew stop` to end the team. It ends only the processes
+   the CLI started, and then it removes the team record.
+
+`trellis-crew start` also takes `--workers N`, which sets the number of
+workers, and `--merge-reporters`, which joins the default team's auditor
+and researcher into one session.
+
+To restart one session with new settings, run
+`trellis-crew respawn <name>`. It takes `--model`, `--effort`, and
+`--autocompact`. A flag that you leave out keeps the value from the
+roles file. The session starts again with an empty context. So run it
+only between units of work.
+
+To check for a newer CLI and update the plugin, run
+`trellis-crew update`. Add `--check` to change nothing. The CLI prints
+your harness's own update command, and it never runs that command.
+
+### What each harness does
+
+The launch fields `autocompact`, `model`, and `effort` are checked on
+Claude Code only. On every other harness, the CLI ignores each field
+that you set and prints a warning that names the session and the field.
+
+- Claude Code starts each session in the background with `claude --bg`.
+  The CLI records no process for it. So `stop` and `respawn` cannot end
+  it, and `stop` tells you so.
+- Qwen Code starts each session as its own `qwen -p` process. The first
+  prompt tells the session its name.
+- Hermes Agent sessions do not start on their own. The CLI prints the
+  `hermes chat -p <name>` command and the kickoff message for each one.
+  You start each session in its own terminal.
+- Codex CLI sessions start under one supervisor process. `start` returns
+  at once. The supervisor starts each `codex exec` process and records
+  its process ID. `stop` ends the supervisor and each session.
+- Amp starts each session as a titled thread on the vendor's servers.
+  No command to stop a thread is documented. So `stop` leaves each
+  thread running and prints its ID when the CLI has it.
+- Any other harness, such as OpenCode, gets the kickoff message for
+  each session printed. The CLI runs nothing on it.
+
+By default, on every harness except Claude Code and Qwen Code, sessions
+talk through a file mailbox. The default folder is
+`~/.trellis-crew/mailbox`. Set `mailbox` in the roles file to use
+another folder.
+
+### Exit codes
+
+- `0`: the command finished.
+- `1`: a step failed, or a documented gap stopped a step. The output
+  names the step.
+- `2`: a flag or the roles file is wrong. Nothing was started or
+  stopped.
+
+### Known gaps
+
+Some facts that the CLI needs are not documented yet. The CLI names each
+gap when it reaches one, and it never guesses.
+
+- The plugin install source on Qwen Code, Hermes Agent, Amp, and
+  OpenCode.
+- The session ID format that `claude --bg` prints, and the thread ID
+  format that `amp -ox` prints.
+- A way to keep a finished `codex exec` process running. The supervisor
+  does not restart a session that ends.
+- A way to give a new Hermes Agent chat its first prompt.
+
 ## Your config: the tree and the prompts
 
 A trellis-crew config has two halves. The roles file, `sagespec.yml`,
