@@ -293,7 +293,7 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
   // and removed in a later one stays in history, so the tree scan misses it.
   let commitsScanned = 0;
   if (range !== undefined) {
-    const history = await git(['log', '-p', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--format=%x1e%H', range, '--']);
+    const history = await git(['log', '-p', '--diff-merges=first-parent', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--format=%x1e%H', range, '--']);
     if (!history.ok) failures.push(`cannot read the added lines of the commits in ${range}`);
     for (const record of history.stdout.split('\x1e')) {
       const newline = record.indexOf('\n');

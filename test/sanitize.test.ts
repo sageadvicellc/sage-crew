@@ -281,6 +281,27 @@ describe('sanitize run', () => {
     expect(history.err).toMatch(/secret: notes\.md \(commit [0-9a-f]{7}\):2/);
   });
 
+  it('a leak added only inside a merge commit fails', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    repo.git('checkout', '-q', '-b', 'side');
+    repo.write('side.md', 'side\n');
+    repo.commit('chore: side');
+    repo.git('checkout', '-q', 'main');
+    repo.write('main.md', 'main\n');
+    repo.commit('chore: main');
+    repo.git('merge', '-q', '--no-ff', '--no-commit', 'side');
+    repo.write('merged.md', `${fake.githubToken}\n`);
+    repo.git('add', 'merged.md');
+    repo.git('commit', '-q', '-m', 'chore: merge side');
+    repo.write('merged.md', 'gone\n');
+    repo.commit('chore: tidy');
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD~2..HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/secret: merged\.md \(commit [0-9a-f]{7}\):1/);
+  });
+
   it('a leak added in one commit and removed in a later one still fails', async () => {
     const repo = makeFixtureRepo();
     repo.write('clean.md', 'nothing\n');
