@@ -331,7 +331,9 @@ as `gap: <reason>`, never as a guess.
 
 ## 4. The roles file
 
-A roles file replaces the default team. `trellis-crew start` reads
+A roles file replaces the default team. It is one half of a config: it
+sets the team layout, and the agent definitions in `skills/` are the other
+half. `trellis-crew start` reads
 `./sagespec.yml` by default, and `--config <file>` names another file.
 The file is YAML. `sagespec.example.yml` in this repository matches the
 default team.
