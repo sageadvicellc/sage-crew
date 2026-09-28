@@ -1,0 +1,41 @@
+{
+  "name": "trellis-crew",
+  "version": "0.1.0",
+  "description": "Sets up a small team of agent sessions that split work, hand off tasks, and report status.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "trellis-crew": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "skills",
+    ".claude-plugin",
+    "sagespec.example.yml"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sageadvicellc/trellis-crew.git"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "sanitize": "node -e \"console.error('sanitize: the sanitizer arrives in plan step 2'); process.exit(0)\"",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build && npm run sanitize"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "eslint": "^10.11.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.2"
+  }
+}

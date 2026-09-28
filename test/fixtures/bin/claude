@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fixture stub. Answers the version probe like a Claude Code binary.
+echo "2.1.0 (Claude Code)"

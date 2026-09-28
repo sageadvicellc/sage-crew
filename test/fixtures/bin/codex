@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fixture stub. Codex --version is unconfirmed, so this stub fails it.
+exit 1

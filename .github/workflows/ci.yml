@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The sanitizer reads the messages of every commit in the range.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Gap: setup-node is not used yet. It waits for a verified commit SHA,
+      # which the maintainer names. Until then this step checks the runner's
+      # own Node and fails below major version 24, the engines floor.
+      - name: Check the Node version
+        run: |
+          major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+          echo "node $(node --version)"
+          if [ "$major" -lt 24 ]; then
+            echo "::error::Node 24 or later is required. Found major version $major."
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      # The deny-list is never committed. It lives in a repository secret.
+      # The secret reaches this step as an environment variable and goes
+      # straight to a file, so it never appears in the log. When the secret
+      # is missing, no file is written and the sanitize step fails closed.
+      - name: Write the deny-list
+        env:
+          SANITIZE_DENYLIST_CONTENT: ${{ secrets.SANITIZE_DENYLIST_CONTENT }}
+        run: |
+          if [ -n "$SANITIZE_DENYLIST_CONTENT" ]; then
+            printf '%s\n' "$SANITIZE_DENYLIST_CONTENT" > "$RUNNER_TEMP/denylist.txt"
+          fi
+
+      - name: Sanitize
+        env:
+          SANITIZE_REQUIRE_DENYLIST: "1"
+          SANITIZE_DENYLIST: ${{ runner.temp }}/denylist.txt
+          SANITIZE_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: npm run sanitize
