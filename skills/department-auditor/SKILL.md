@@ -1,6 +1,6 @@
 ---
 name: department-auditor
-description: Runs the auditor role in sage-crew, a multi-session team pattern. Reads job records and transcripts on a fixed clock and writes dated log lines. Use when the fixed clock ticks.
+description: Runs the auditor role in sage-crew, a multi-session team pattern. Reads job records and transcripts on a fixed clock, writes dated log lines, and writes each scheduled brief's edition file. Use when the fixed clock ticks or an edition is due.
 ---
 
 ## The auditor role
@@ -16,7 +16,20 @@ The auditor runs read-only:
   for the line's format.
 - Never treat a decision relayed by another session as its own
   authority to act on that decision.
+- Read the clock before writing any time into a comment, a log line, or
+  an edition file.
 
-Trigger: the fixed clock ticks.
+## Briefs
 
-Writes: one dated log line per check.
+At each scheduled edition time, write one edition file in the schema at
+`docs/brief-schema.md`: what merged, what is open and what blocks it,
+the decisions waiting with exact comment URLs and default times, session
+minutes (working, blocked, blocked on the operator, idle), security
+findings opened and closed, spend where readable, and what comes next.
+Every number names its source. A number that could not be read is a gap
+line, never a zero. Hand the file's path to the reporting chain in one
+line.
+
+Trigger: the fixed clock ticks, or an edition is due.
+
+Writes: one dated log line per check, and one edition file per brief.
