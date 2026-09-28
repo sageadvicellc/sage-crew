@@ -249,6 +249,38 @@ describe('sanitize run', () => {
     expect((await sanitize(repo.root, { SANITIZE_DENYLIST: empty }, 'HEAD')).code).toBe(1);
   });
 
+  it('a leak added in one commit and removed in a later one still fails', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    repo.write('notes.md', `line one\n${fake.githubToken}\n`);
+    repo.commit('chore: add notes');
+    const added = repo.git('rev-parse', '--short=7', 'HEAD').trim();
+    repo.write('notes.md', 'line one\n');
+    repo.commit('chore: tidy notes');
+
+    const vars = { SANITIZE_DENYLIST: denyFile() };
+    const all = await sanitize(repo.root, vars, 'HEAD~2..HEAD');
+    expect(all.code).toBe(1);
+    expect(all.err).toContain(`secret: notes.md (commit ${added}):2`);
+    expect(all.err).not.toContain(fake.githubToken);
+
+    // The range that holds only the removal is clean.
+    expect((await sanitize(repo.root, vars, 'HEAD~1..HEAD')).code).toBe(0);
+
+    // A deny-listed term added in history fails too, and a file allowance clears it.
+    const deny = makeFixtureRepo();
+    deny.write('clean.md', 'nothing\n');
+    deny.commit('chore: start');
+    deny.write('docs/a.md', `${TERM}\n`);
+    deny.commit('chore: add a');
+    deny.write('docs/a.md', 'gone\n');
+    deny.commit('chore: remove a');
+    expect((await sanitize(deny.root, vars, 'HEAD~2..HEAD')).err).toMatch(/deny-list: docs\/a\.md \(commit [0-9a-f]{7}\):1/);
+    const allowed = { SANITIZE_DENYLIST: denyFile(`allow docs/a.md ${TERM}\n`) };
+    expect((await sanitize(deny.root, allowed, 'HEAD~2..HEAD')).code).toBe(0);
+  });
+
   it('a tracked file it cannot read fails the run and is named', async () => {
     const locked = makeFixtureRepo();
     locked.write('clean.md', 'nothing\n');

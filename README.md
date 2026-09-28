@@ -171,8 +171,9 @@ licence.
 
 This repository is public. The sanitizer keeps private text out of it.
 Run it with `npm run sanitize`. It scans every tracked file, the staged
-diff, and the messages of a range of commits. It fails on four classes
-of text.
+diff, and the messages and added lines of a range of commits. So a leak
+that one commit adds and a later commit removes still fails. It fails on
+four classes of text.
 
 1. Secrets: an API key or token prefix followed by a full key, a
    private-key block, a committed `.env` file, and a password inside a
@@ -218,8 +219,8 @@ never holds a deny-list allowance.
 
 ### The commit range
 
-`npm run sanitize -- --range <base>..<head>` scans the messages in that
-range. The `SANITIZE_RANGE` variable does the same. With neither, the
+`npm run sanitize -- --range <base>..<head>` scans the messages and the
+added lines in that range. The `SANITIZE_RANGE` variable does the same. With neither, the
 range is `origin/main..HEAD` when `origin/main` exists.
 
 ### The pre-push hook

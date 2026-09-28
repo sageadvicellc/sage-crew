@@ -238,6 +238,32 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     }
   }
 
+  // The added lines of each commit in the range. A leak added in one commit
+  // and removed in a later one stays in history, so the tree scan misses it.
+  let commitsScanned = 0;
+  if (range !== undefined) {
+    const history = await git(['log', '-p', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--format=%x1e%H', range, '--']);
+    if (!history.ok) failures.push(`cannot read the added lines of the commits in ${range}`);
+    for (const record of history.stdout.split('\x1e')) {
+      const newline = record.indexOf('\n');
+      const sha = (newline === -1 ? record : record.slice(0, newline)).trim();
+      if (sha === '') continue;
+      commitsScanned += 1;
+      const files = parseStagedDiff(newline === -1 ? '' : record.slice(newline + 1)).filter((file) => file.path !== deny.selfPath);
+      for (const file of files) {
+        findings.push(
+          ...scanText(file.lines.join('\n'), {
+            where: `${file.path} (commit ${sha.slice(0, 7)})`,
+            path: file.path,
+            lineNumbers: file.lineNumbers,
+            ...(deny.list ? { deny: deny.list } : {}),
+            allow,
+          }),
+        );
+      }
+    }
+  }
+
   print(findings, opts.err);
   for (const failure of failures) opts.err(`sanitize: ${failure}`);
   if (findings.length > 0 || failures.length > 0) {
@@ -245,7 +271,7 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     return 1;
   }
   opts.out(
-    `sanitize: clean. ${tracked.length} tracked files, ${staged.length} staged files, ${messages} commit messages${range ? ` in ${range}` : ''}.`,
+    `sanitize: clean. ${tracked.length} tracked files, ${staged.length} staged files, ${messages} commit messages and the added lines of ${commitsScanned} commits${range ? ` in ${range}` : ''}.`,
   );
   return 0;
 }
