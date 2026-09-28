@@ -72,7 +72,7 @@ describe('start on Claude Code', () => {
     if (!team.ok || !team.record) throw new Error('no team');
     for (const entry of team.record.sessions) {
       expect(entry.pid).toBeGreaterThan(40000);
-      expect(entry.session_id).toBe(`fixture-${entry.name}`);
+      expect(entry.session_id).toBe(`fixture-${entry.name}-${entry.pid}`);
     }
   });
 

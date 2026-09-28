@@ -2,6 +2,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseCommand, USAGE } from './args.ts';
+import { runRespawn } from './commands/respawn.ts';
 import { launchTeam, loadForHarness } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runStop } from './commands/stop.ts';
@@ -59,6 +60,8 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
       return runStatus(deps);
     case 'stop':
       return runStop(deps);
+    case 'respawn':
+      return runRespawn(command, deps);
     default:
       deps.err(`trellis-crew ${command.name}: not built yet`);
       return EXIT_RUNTIME;

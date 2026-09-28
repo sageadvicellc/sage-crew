@@ -37,14 +37,14 @@ export function writeRoles(env: Env, name: string, text: string): string {
  * A stand-in adapter that starts each session as a detached process, so
  * tests can exercise the pid paths that a later harness step fills in.
  */
-export function detachedAdapter(id: Adapter['id'] = 'qwen-code'): Adapter {
+export function detachedAdapter(id: Adapter['id'] = 'qwen-code', flags: Adapter['flags'] = {}): Adapter {
   return {
     id,
     displayName: 'Fixture Harness',
-    flags: {},
+    flags,
     async launch(name, kickoff, flagArgs, ctx) {
       const { pid } = await ctx.runner.spawnDetached(ctx.binaryPath, [...flagArgs, kickoff]);
-      return { ok: true, entry: { name, pid, session_id: `fixture-${name}` } };
+      return { ok: true, entry: { name, pid, session_id: `fixture-${name}-${pid}` } };
     },
     noProcessNote: (entry) => `${entry.name}: fixture note`,
   };
