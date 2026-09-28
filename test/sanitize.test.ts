@@ -281,6 +281,46 @@ describe('sanitize run', () => {
     expect(history.err).toMatch(/secret: notes\.md \(commit [0-9a-f]{7}\):2/);
   });
 
+  it('a UTF-16 file is scanned in the staged diff and in history, and odd-length UTF-16 cannot be read', async () => {
+    const leak = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`see ${fake.macHome}/x\n`, 'utf16le')]);
+    const vars = { SANITIZE_DENYLIST: denyFile() };
+
+    const staged = makeFixtureRepo();
+    staged.write('clean.md', 'nothing\n');
+    staged.commit('chore: start');
+    writeFileSync(join(staged.root, 'wide.txt'), leak);
+    staged.git('add', 'wide.txt');
+    rmSync(join(staged.root, 'wide.txt'));
+    staged.git('rm', '-q', '--cached', 'clean.md');
+    const s = await sanitize(staged.root, vars, 'HEAD');
+    expect(s.err).toContain('private-path: wide.txt (staged):1');
+
+    const history = makeFixtureRepo();
+    history.write('clean.md', 'nothing\n');
+    history.commit('chore: start');
+    writeFileSync(join(history.root, 'wide.txt'), leak);
+    history.commit('chore: add wide');
+    history.git('rm', '-q', 'wide.txt');
+    history.commit('chore: remove wide');
+    const h = await sanitize(history.root, vars, 'HEAD~2..HEAD');
+    expect(h.code).toBe(1);
+    expect(h.err).toMatch(/private-path: wide\.txt \(commit [0-9a-f]{7}\):1/);
+
+    const odd = makeFixtureRepo();
+    odd.write('clean.md', 'nothing\n');
+    odd.commit('chore: start');
+    writeFileSync(join(odd.root, 'odd.txt'), Buffer.concat([leak, Buffer.from([0x41])]));
+    odd.commit('chore: add odd');
+    const o = await sanitize(odd.root, vars, 'HEAD~1..HEAD');
+    expect(o.code).toBe(1);
+    expect(o.err).toMatch(/sanitize: cannot read odd\.txt\n/);
+    expect(o.err).toMatch(/sanitize: cannot read odd\.txt \(commit [0-9a-f]{7}\)/);
+    odd.write('odd2.txt', 'x');
+    writeFileSync(join(odd.root, 'odd2.txt'), Buffer.concat([leak, Buffer.from([0x41])]));
+    odd.git('add', 'odd2.txt');
+    expect((await sanitize(odd.root, vars, 'HEAD')).err).toMatch(/sanitize: cannot read odd2\.txt \(staged\)/);
+  });
+
   it('a leak added only inside a merge commit fails', async () => {
     const repo = makeFixtureRepo();
     repo.write('clean.md', 'nothing\n');

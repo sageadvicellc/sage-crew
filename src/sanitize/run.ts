@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,27 +109,31 @@ export function parseStagedDiff(diff: string): StagedFile[] {
   return files.filter((file) => file.lines.length > 0);
 }
 
+/** Marks a file or blob the sanitizer cannot read or decode. It fails the run. */
+export const CANNOT_READ = Symbol('cannot read');
+
 /**
  * Decodes a file's bytes as text. UTF-8 is the default. A UTF-16 file,
  * with a byte-order mark or with a zero byte in every other place, is
  * decoded as UTF-16, because its zero bytes would otherwise mark it as
  * binary and skip it. Any other file with a zero byte is binary, and
- * returns undefined.
+ * returns undefined. A file that looks like UTF-16 but has an odd number
+ * of bytes cannot be decoded whole, so it returns CANNOT_READ.
  */
-export function decodeText(buffer: Buffer): string | undefined {
-  if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString('utf16le');
-  if (buffer[0] === 0xfe && buffer[1] === 0xff) return Buffer.from(buffer.subarray(2)).swap16().toString('utf16le');
+export function decodeText(buffer: Buffer): string | undefined | typeof CANNOT_READ {
+  const bom = buffer[0] === 0xff && buffer[1] === 0xfe ? 'le' : buffer[0] === 0xfe && buffer[1] === 0xff ? 'be' : undefined;
   const sample = buffer.subarray(0, 8000);
-  if (!sample.includes(0)) return buffer.toString('utf8');
-  const order = utf16Order(sample);
-  if (order === 'le') return buffer.toString('utf16le');
-  if (order === 'be') return Buffer.from(buffer).swap16().toString('utf16le');
-  return undefined;
+  if (bom === undefined && !sample.includes(0)) return buffer.toString('utf8');
+  const order = bom ?? utf16Order(sample.subarray(0, sample.length - (sample.length % 2)));
+  if (order === undefined) return undefined;
+  if (buffer.length % 2 !== 0) return CANNOT_READ;
+  const body = Buffer.from(buffer.subarray(bom === undefined ? 0 : 2));
+  return (order === 'be' ? body.swap16() : body).toString('utf16le');
 }
 
 /** Names UTF-16 text with no byte-order mark: zero bytes in all odd places (LE) or all even places (BE). */
 function utf16Order(sample: Buffer): 'le' | 'be' | undefined {
-  if (sample.length < 2 || sample.length % 2 !== 0) return undefined;
+  if (sample.length < 2) return undefined;
   let evenZeros = 0;
   let oddZeros = 0;
   for (let i = 0; i < sample.length; i += 1) {
@@ -142,8 +147,6 @@ function utf16Order(sample: Buffer): 'le' | 'be' | undefined {
   if (oddZeros === 0 && evenZeros >= pairs * 0.9) return 'be';
   return undefined;
 }
-
-const CANNOT_READ = Symbol('cannot read');
 
 /**
  * Reads one tracked path as text: a symlink's target, or a file's content.
@@ -159,6 +162,22 @@ function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
   } catch {
     return CANNOT_READ;
   }
+}
+
+/** Reads one git blob as raw bytes, such as `:path` for the index or `<sha>:path`. Undefined when git cannot read it. */
+function gitBlob(root: string, vars: SanitizeOptions['vars'], spec: string): Buffer | undefined {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(vars)) if (value !== undefined) env[key] = value;
+  const result = spawnSync('git', ['cat-file', 'blob', spec], { cwd: root, env, maxBuffer: 512 * 1024 * 1024 });
+  return result.error || result.status !== 0 ? undefined : result.stdout;
+}
+
+/** The paths that `git ... --numstat -z` lists as binary, shown as `-\t-\t<path>`. */
+function binaryPaths(numstat: string): string[] {
+  return numstat
+    .split('\0')
+    .filter((entry) => entry.startsWith('-\t-\t'))
+    .map((entry) => entry.slice(4));
 }
 
 interface DenyLoad {
@@ -269,6 +288,26 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     );
   }
 
+  // A file git calls binary shows no lines in a diff. Each one is read from
+  // git and decoded, so UTF-16 text is scanned too. A real binary is skipped.
+  const scanBinaries = async (list: readonly string[], specFor: (path: string) => string, label: string): Promise<void> => {
+    const listed = await git(list);
+    if (!listed.ok) {
+      failures.push(`cannot list the binary files in ${label}`);
+      return;
+    }
+    for (const path of binaryPaths(listed.stdout)) {
+      if (path === deny.selfPath) continue;
+      const where = `${path} (${label})`;
+      const blob = gitBlob(root, opts.vars, specFor(path));
+      const text = blob === undefined ? CANNOT_READ : decodeText(blob);
+      if (text === CANNOT_READ) failures.push(`cannot read ${where}`);
+      else if (text !== undefined) findings.push(...scanText(text, { where, path, ...(deny.list ? { deny: deny.list } : {}), allow }));
+    }
+  };
+  const BINARY_LIST = ['--numstat', '-z', '--no-renames', '--diff-filter=ACMRT'];
+  await scanBinaries(['diff', '--cached', ...BINARY_LIST], (path) => `:${path}`, 'staged');
+
   const range = await resolveRange(opts, git);
   let messages = 0;
   if (range === undefined) {
@@ -312,6 +351,11 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
           }),
         );
       }
+      await scanBinaries(
+        ['diff-tree', '-r', '--no-commit-id', '--root', '--diff-merges=first-parent', ...BINARY_LIST, sha],
+        (path) => `${sha}:${path}`,
+        `commit ${sha.slice(0, 7)}`,
+      );
     }
   }
 
