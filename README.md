@@ -57,8 +57,9 @@ the file alone and exits 1. Before it writes, install copies the file to
 a dated backup beside it, and it prints both paths.
 
 For the file mailbox, install reads the mailbox folder from
-`./sagespec.yml` when that file is in the current folder. It shows the
-file first and asks, as `start` does. `--yes` skips the question.
+`./sagespec.yml` when that file is in the current folder. It first
+shows the same confirm screen as `start`, and then it asks. `--yes`
+skips the question.
 
 ### Run your team
 
@@ -66,12 +67,14 @@ file first and asks, as `start` does. `--yes` skips the question.
    and change it. With no roles file, the CLI starts the default team.
 2. Run `trellis-crew start`. It reads `./sagespec.yml`. Pass
    `--roles <file>` to read another file. When `start` finds
-   `./sagespec.yml` on its own, it prints the file's path, the
-   transport, the mailbox folder, and each kickoff message and model.
-   Then it asks before it starts anything. A cloned
-   folder can hold another author's prompts. Add `--yes` to skip the
-   question in a script. With no terminal and no `--yes`, it starts
-   nothing.
+   `./sagespec.yml` on its own, it shows a confirm screen. The screen
+   prints the file's path, the harness, the transport, and the full
+   path of the mailbox folder. It prints each task profile with its
+   model and effort. For each session, it prints the name, the kickoff
+   message, and any model, effort, and autocompact value. Then it asks
+   before it starts anything. A cloned folder can hold another author's
+   prompts. Add `--yes` to skip the question in a script. With no
+   terminal and no `--yes`, it starts nothing.
 3. Run `trellis-crew status` to list each session and its state.
 4. Run `trellis-crew stop` to end the team. It ends only the processes
    the CLI started, and then it removes the team record. The CLI checks
