@@ -1,6 +1,6 @@
 ---
 name: department-audit-log
-description: Writes one dated log line for the sage-crew auditor role. Use when the auditor is about to record a check.
+description: Writes one dated log line for the trellis-crew auditor role. Use when the auditor is about to record a check.
 ---
 
 ## The audit log line

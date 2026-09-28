@@ -1,6 +1,6 @@
 ---
 name: department-handoff-contract
-description: Writes the hand-off contract block for sage-crew, a multi-session team pattern: three required parts and an optional task profile. Use before any role sends a hand-off.
+description: Writes the hand-off contract block for trellis-crew, a multi-session team pattern: three required parts and an optional task profile. Use before any role sends a hand-off.
 ---
 
 ## The hand-off contract

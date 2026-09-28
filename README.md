@@ -1,8 +1,8 @@
-# sage-crew
+# trellis-crew
 
 👷🏻‍♀️🌱 Build anything, grow smarter
 
-sage-crew sets up a small team of agent sessions that split work, hand
+trellis-crew sets up a small team of agent sessions that split work, hand
 off tasks, and report status. It sits on Trellis, an open framework,
 and ships free under the MIT licence. Peer messaging runs on three
 tiers. Tier one is native: Claude Code and Qwen Code ship a peer list,

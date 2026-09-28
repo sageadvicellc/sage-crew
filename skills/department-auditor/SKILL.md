@@ -1,6 +1,6 @@
 ---
 name: department-auditor
-description: Runs the auditor role in sage-crew, a multi-session team pattern. Reads job records and transcripts on a fixed clock, writes dated log lines, and writes each scheduled brief's edition file. Use when the fixed clock ticks or an edition is due.
+description: Runs the auditor role in trellis-crew, a multi-session team pattern. Reads job records and transcripts on a fixed clock, writes dated log lines, and writes each scheduled brief's edition file. Use when the fixed clock ticks or an edition is due.
 ---
 
 ## The auditor role

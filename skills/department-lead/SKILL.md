@@ -1,6 +1,6 @@
 ---
 name: department-lead
-description: Runs the lead role in sage-crew, a multi-session team pattern. Names each peer, sends the hand-off contract in its first message, sends work by name, and holds a task only once a worker claims it. Use when starting the pattern or dispatching the next unit of work.
+description: Runs the lead role in trellis-crew, a multi-session team pattern. Names each peer, sends the hand-off contract in its first message, sends work by name, and holds a task only once a worker claims it. Use when starting the pattern or dispatching the next unit of work.
 ---
 
 ## The lead role
