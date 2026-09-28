@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_MAILBOX, ensureMailboxFolder, mailboxPath } from '../src/mailbox/folder.ts';
 import { main } from '../src/cli.ts';
-import { privateFolderProblem } from '../src/fs-private.ts';
+import { parentFolderProblem, privateFolderProblem } from '../src/fs-private.ts';
 import { defaultTeam } from '../src/roles/defaults.ts';
 import { writeInstallRecord } from '../src/store/install-yml.ts';
 import { writeTeam } from '../src/store/team-json.ts';
@@ -119,6 +119,38 @@ describe('file mailbox folder', () => {
     expect(existsSync(path)).toBe(false);
     // Every ancestor above the fixture home belongs to root or to this user.
     expect(ensureMailboxFolder(path, { uid: own })).toMatchObject({ ok: true, created: true });
+  });
+
+  it('a symlink in the path that another user owns is refused, even when its target is private', () => {
+    const env = makeTestEnv();
+    const own = process.getuid?.();
+    if (own === undefined) return;
+    const real = join(env.home, 'real');
+    mkdirSync(real, { mode: 0o700 });
+    const team = join(env.home, 'team');
+    symlinkSync(real, team);
+    const inner = join(real, 'inner');
+    mkdirSync(inner, { mode: 0o700 });
+    symlinkSync(inner, join(real, 'hop'));
+    const path = join(team, 'hop', 'mail');
+    // Owned by this user, each symlink is followed and allowed.
+    expect(parentFolderProblem(path, own)).toBeUndefined();
+    // Another user owns a symlink: the first one, or one inside its target.
+    for (const link of [team, join(real, 'hop')]) {
+      const lstat = (target: string) => {
+        const stat = lstatSync(target);
+        return target === link ? Object.assign(Object.create(Object.getPrototypeOf(stat) as object) as typeof stat, stat, { uid: own + 1 }) : stat;
+      };
+      expect(parentFolderProblem(path, own, { lstat }), link).toMatch(new RegExp(`^${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, in the path of .*, is a symlink owned by another user`));
+      expect(ensureMailboxFolder(path, { uid: own, lstat }), link).toMatchObject({ ok: false });
+    }
+    expect(existsSync(join(inner, 'mail'))).toBe(false);
+    // A symlink owned by root is allowed.
+    const rootOwned = (target: string) => {
+      const stat = lstatSync(target);
+      return target === team ? Object.assign(Object.create(Object.getPrototypeOf(stat) as object) as typeof stat, stat, { uid: 0 }) : stat;
+    };
+    expect(parentFolderProblem(path, own, { lstat: rootOwned })).toBeUndefined();
   });
 
   it('a folder owned by another user is refused', () => {

@@ -37,10 +37,38 @@ describe('printable', () => {
       expect(printable(`a${raw}b`), shown).toBe(`a${shown}b`);
     }
     // Neighbours of each range, and ordinary non-ASCII text, stay as they are.
-    for (const plain of ['\u{e0080}', '\u{e01f0}', '\u{dffff}', '\u200a', '\u2061', '\ufdff', '\ufe10', 'caf\u00e9', '\u65e5\u672c', '\u{1f331}']) {
+    for (const plain of ['\u{e0080}', '\u{e01f0}', '\u{dffff}', '\u200a', '\u2065', '\ufdff', '\ufe10', '\u115e', '\u3165', '\ufff8', 'caf\u00e9', '\u65e5\u672c', '\u{1f331}']) {
       expect(hasControlCharacter(plain), plain).toBe(false);
       expect(printable(plain)).toBe(plain);
     }
+  });
+
+  it('escapes every format, control, and separator character, and the Hangul fillers', () => {
+    const hidden: Array<[string, string]> = [
+      ['\u00ad', '\\xad'],
+      ['\u180e', '\\u180e'],
+      ['\u2061', '\\u2061'],
+      ['\u2062', '\\u2062'],
+      ['\u2063', '\\u2063'],
+      ['\u2064', '\\u2064'],
+      ['\u206a', '\\u206a'],
+      ['\u206f', '\\u206f'],
+      ['\ufff9', '\\ufff9'],
+      ['\ufffa', '\\ufffa'],
+      ['\ufffb', '\\ufffb'],
+      ['\u{1d173}', '\\u{1d173}'],
+      ['\u{1d17a}', '\\u{1d17a}'],
+      ['\u115f', '\\u115f'],
+      ['\u1160', '\\u1160'],
+      ['\u3164', '\\u3164'],
+      ['\uffa0', '\\uffa0'],
+    ];
+    for (const [raw, shown] of hidden) {
+      expect(hasControlCharacter(`a${raw}b`), shown).toBe(true);
+      expect(printable(`a${raw}b`), shown).toBe(`a${shown}b`);
+    }
+    // Tab and newline stay allowed.
+    expect(hasControlCharacter('a\tb\nc')).toBe(false);
   });
 
   it('holds no literal invisible or bidirectional character in its own source', () => {

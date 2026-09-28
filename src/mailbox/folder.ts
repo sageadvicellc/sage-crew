@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync } from 'node:fs';
+import { lstatSync, mkdirSync, type Stats } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { expandHome, type Env } from '../env.ts';
 import { parentFolderProblem, privateFolderProblem } from '../fs-private.ts';
@@ -29,12 +29,12 @@ export type MailboxResult = { ok: true; path: string; created: boolean } | { ok:
  */
 export function ensureMailboxFolder(
   path: string,
-  options: { mkdir?: (path: string) => void; uid?: number } = {},
+  options: { mkdir?: (path: string) => void; uid?: number; lstat?: (path: string) => Stats } = {},
 ): MailboxResult {
   const mkdir = options.mkdir ?? ((target: string) => mkdirSync(target, { recursive: true, mode: 0o700 }));
   const uid = options.uid ?? process.getuid?.();
-  const check = (): string | undefined => parentFolderProblem(path, uid) ?? privateFolderProblem(path, uid);
-  const parents = parentFolderProblem(path, uid);
+  const check = (): string | undefined => parentFolderProblem(path, uid, options.lstat === undefined ? {} : { lstat: options.lstat }) ?? privateFolderProblem(path, uid);
+  const parents = parentFolderProblem(path, uid, options.lstat === undefined ? {} : { lstat: options.lstat });
   if (parents !== undefined) return { ok: false, path, message: `${parents}. The mailbox folder must be private to you` };
   try {
     const stat = lstatSync(path);

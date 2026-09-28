@@ -335,6 +335,39 @@ describe('sanitize run', () => {
     expect(slow.err).toMatch(/cannot read wide\.txt \(staged\): git cat-file failed: timed out/);
   });
 
+  it('a file path with an escape sequence or a newline prints with neither', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    const name = 'z\u001b[2K\n::error::forged';
+    writeFileSync(join(repo.root, name), `${TERM}\n`);
+    repo.git('add', '--', name);
+    const wide = `w\u001b[2K\n::error::wide`;
+    writeFileSync(join(repo.root, wide), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${TERM}\n`, 'utf16le')]));
+    repo.git('add', '--', wide);
+    rmSync(join(repo.root, wide));
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).not.toContain('\u001b');
+    expect(result.err.split('\n').filter((line) => line !== '').every((line) => line.startsWith('sanitize: '))).toBe(true);
+    expect(result.err).toContain('deny-list: z\\x1b[2K\\n::error::forged:1');
+    expect(result.err).toContain('w\\x1b[2K\\n::error::wide (staged)');
+  });
+
+  it('a staged binary file named like a stage number is read as that path', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.write('x', 'nothing here\n');
+    repo.commit('chore: start');
+    writeFileSync(join(repo.root, '0:x'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${TERM}\n`, 'utf16le')]));
+    repo.git('add', '--', '0:x');
+    rmSync(join(repo.root, '0:x'));
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('deny-list: 0:x (staged):1');
+    expect(result.err).not.toMatch(/cannot read 0:x \(staged\)/);
+  });
+
   it('59: an unset SANITIZE_DENYLIST warns, names the variable, and still runs the other checks', async () => {
     const repo = makeFixtureRepo();
     repo.write('clean.md', 'nothing\n');
@@ -535,10 +568,10 @@ describe('sanitize run', () => {
     expect(code).toBe(1);
     expect(err.text()).toMatch(/private-path: wide\.txt \(staged\):1/);
     expect(err.text()).not.toMatch(/big\.bin/);
-    expect(reads.filter((r) => r.spec === ':big.bin')).toEqual([{ spec: ':big.bin', maxBytes: 8000 }]);
-    expect(reads.filter((r) => r.spec === ':wide.txt')).toEqual([
-      { spec: ':wide.txt', maxBytes: 8000 },
-      { spec: ':wide.txt', maxBytes: undefined },
+    expect(reads.filter((r) => r.spec === ':0:big.bin')).toEqual([{ spec: ':0:big.bin', maxBytes: 8000 }]);
+    expect(reads.filter((r) => r.spec === ':0:wide.txt')).toEqual([
+      { spec: ':0:wide.txt', maxBytes: 8000 },
+      { spec: ':0:wide.txt', maxBytes: undefined },
     ]);
   });
 

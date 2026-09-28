@@ -2,19 +2,18 @@
  * Characters that can move the cursor, clear a line, reorder text, or hide
  * text on a terminal. A printed field from a roles file must hold none.
  *
- * - C0 controls except tab and newline, DEL, and C1 controls.
- * - The Arabic letter mark, and the bidirectional marks, embeddings,
- *   overrides, and isolates.
- * - Zero-width characters: the zero-width space, non-joiner, and joiner,
- *   the word joiner, and the byte-order mark.
- * - The line separator and the paragraph separator.
+ * - Every control character (Cc) except tab and newline.
+ * - Every format character (Cf), such as the soft hyphen, the zero-width
+ *   characters, the bidirectional marks, and the invisible operators.
+ * - The line separator (Zl) and the paragraph separator (Zp).
  * - Variation selectors, in both blocks.
- * - Unicode tag characters.
+ * - The Hangul fillers, which show as blank space.
+ * - Unicode tag characters, including the unassigned ones in that block.
  *
  * Every range is written as an escape, so this file holds no invisible
  * character itself.
  */
-export const CONTROL_CHARACTERS = /[\u{0}-\u{8}\u{b}-\u{1f}\u{7f}-\u{9f}\u{61c}\u{200b}-\u{200f}\u{2028}-\u{202e}\u{2060}\u{2066}-\u{2069}\u{fe00}-\u{fe0f}\u{feff}\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/u;
+export const CONTROL_CHARACTERS = /(?![\t\n])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{115f}\u{1160}\u{3164}\u{ffa0}\u{e0000}-\u{e007f}]/u;
 
 const CONTROL_GLOBAL = new RegExp(CONTROL_CHARACTERS.source, 'gu');
 

@@ -313,6 +313,11 @@ async function resolveRange(opts: SanitizeOptions, git: Git): Promise<string | u
   return undefined;
 }
 
+/** Escapes a line for output: every control character, and newline and tab too. */
+function oneLine(text: string): string {
+  return printable(text).replace(/\n/g, '\\n').replace(/\t/g, '\\t');
+}
+
 function print(findings: Finding[], err: (line: string) => void): void {
   for (const f of findings) {
     const at = f.line > 0 ? `${f.where}:${f.line}` : f.where;
@@ -321,7 +326,11 @@ function print(findings: Finding[], err: (line: string) => void): void {
 }
 
 /** Runs every check on tracked files, the staged diff, and each commit's message, author, committer, and added lines. Returns the exit code. */
-export async function runSanitize(opts: SanitizeOptions): Promise<number> {
+export async function runSanitize(options: SanitizeOptions): Promise<number> {
+  // File paths, ranges, and git's own text reach every output line. Each
+  // line is escaped, so none can move the cursor or start a new line, such
+  // as one that GitHub Actions would read as a workflow command.
+  const opts: SanitizeOptions = { ...options, out: (line) => options.out(oneLine(line)), err: (line) => options.err(oneLine(line)) };
   const top = await opts.runner.run('git', ['rev-parse', '--show-toplevel'], { cwd: opts.cwd, env: opts.vars });
   if (top.code !== 0) {
     opts.err('sanitize: not inside a git repository');
@@ -382,7 +391,9 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     }
   };
   const BINARY_LIST = ['--numstat', '-z', '--no-renames', '--diff-filter=ACMRT'];
-  await scanBinaries(['diff', '--cached', ...BINARY_LIST], (path) => `:${path}`, 'staged');
+  // `:0:<path>` names stage 0 of the path. A bare `:<path>` would read a
+  // file named `0:x` as stage 0 of `x`.
+  await scanBinaries(['diff', '--cached', ...BINARY_LIST], (path) => `:0:${path}`, 'staged');
 
   // Each commit in the range is read by its own id. No git output is split
   // on a byte that commit content can hold, and only a checked hex id ever
