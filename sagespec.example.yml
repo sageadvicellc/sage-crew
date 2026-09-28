@@ -1,10 +1,14 @@
-# sage-crew roles file. Pass it with: sage-crew --roles roles.yml
+# trellis-crew roles file. Save it as sagespec.yml, which trellis-crew start
+# reads by default, or pass another file with --roles <file>.
+# This file is one half of your config: it sets the team layout. The agent
+# definitions, the skills/department-* prompts, are the other half. Change
+# either one to change how your team works.
 # This example matches the default team. Delete or add sessions to fit yours.
 
 version: 1
 harness: auto            # auto | claude-code | qwen-code | hermes | codex | amp | opencode
 transport: auto          # auto | native | a2a | mcp-mailbox | file-mailbox
-mailbox: ~/.sage-crew/mailbox   # used only by the mailbox transports
+mailbox: ~/.trellis-crew/mailbox   # used only by the mailbox transports
 operator: you            # the person every decision goes to; shown in kickoff messages
 
 # Task profiles: the lead names one in a hand-off, and the worker runs that

@@ -1,6 +1,6 @@
 ---
 name: department-standby
-description: Runs the standby role in sage-crew, a multi-session team pattern. Waits for a hand-off, claims it by name, or asks the lead for work when idle. Use when a hand-off arrives, addressed by name.
+description: Runs the standby role in trellis-crew, a multi-session team pattern. Waits for a hand-off, claims it by name, or asks the lead for work when idle. Use when a hand-off arrives, addressed by name.
 ---
 
 ## The standby role

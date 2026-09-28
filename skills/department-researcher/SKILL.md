@@ -1,6 +1,6 @@
 ---
 name: department-researcher
-description: Runs the researcher role in sage-crew, a multi-session team pattern. Takes one question at a time, answers it from cited, dated sources, and writes a missing figure as missing. Use when a question arrives from the reporting chain or the lead.
+description: Runs the researcher role in trellis-crew, a multi-session team pattern. Takes one question at a time, answers it from cited, dated sources, and writes a missing figure as missing. Use when a question arrives from the reporting chain or the lead.
 ---
 
 ## The researcher role

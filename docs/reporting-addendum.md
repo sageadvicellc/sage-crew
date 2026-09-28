@@ -1,6 +1,6 @@
-# sage-crew reporting: spec addendum
+# trellis-crew reporting: spec addendum
 
-Status: draft, 2026-09-28. Extends the sage-crew plugin specification and
+Status: draft, 2026-09-28. Extends the trellis-crew plugin specification and
 the CLI addendum. It fixes how a team reports to its operator: one status
 table, one pool table, one comment per decision, worker-owned claims,
 light messages, and two scheduled briefs a day.
@@ -29,7 +29,7 @@ A lead's report on its workers is two small tables.
 
 | Worker | Lead | Task |
 |---|---|---|
-| worker-1 | main | review of the relay bus pull request |
+| worker-1 | main | review of the message bus pull request |
 | worker-2 | main | idle, no queued item |
 
 Then only what needs the operator:
@@ -88,7 +88,7 @@ The worker is the source of truth for what it holds.
 
 Two editions a day, each one self-contained HTML file with charts, built
 from a JSON edition file by the compiler. The edition schema, version 1,
-is `docs/brief-schema.md`. The compiler design: one command, `sage-crew
+is `docs/brief-schema.md`. The compiler design: one command, `trellis-crew
 brief <edition.json>`, writes the HTML beside the JSON; inline CSS, inline
 SVG charts or a pinned vendored chart library, no network request at view
 time, every string escaped, a null number rendered as "not read" with its
@@ -103,16 +103,16 @@ closed, spend where a session can read it, and what comes next. Every
 number names its source. A number that could not be read is a gap line,
 never a zero.
 
-The `sage-crew brief` and `sage-crew scale` commands are added to the
+The `trellis-crew brief` and `trellis-crew scale` commands are added to the
 CLI addendum's command list. Defaults: editions at 09:00 and 23:00 in
-the machine's local time zone; edition files in `~/.sage-crew/briefs/`,
+the machine's local time zone; edition files in `~/.trellis-crew/briefs/`,
 beside the CLI's configuration, so nothing touches the repository; a
 decision's default applies after 12 hours. Each is a field in the roles
 file.
 
 ## 7. The hourly scaling advisor
 
-Once an hour the reporting-chain role runs `sage-crew scale`, which
+Once an hour the reporting-chain role runs `trellis-crew scale`, which
 prints one advice row in the status table. It never adds or removes a
 session on its own; the operator decides.
 
@@ -172,7 +172,7 @@ scaling:
   operator_share_pct: 50
 ```
 
-`sage-crew scale --dry-run` prints the inputs and the rule that fired
+`trellis-crew scale --dry-run` prints the inputs and the rule that fired
 without posting the row.
 
 ## Decisions
@@ -182,7 +182,7 @@ request that carries this document.
 
 1. Default edition times. Answer A: 09:00 and 23:00 local.
 2. Default timeout hours on a decision comment. Answer B: 12 hours.
-3. Default edition folder. Answer B: `~/.sage-crew/briefs/`, beside the
+3. Default edition folder. Answer B: `~/.trellis-crew/briefs/`, beside the
    CLI's configuration.
 4. Scale-up threshold. Answer C: 70 percent.
 5. Scale-down threshold. Answer B: 80 percent.

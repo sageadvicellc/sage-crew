@@ -1,6 +1,6 @@
-# sage-crew CLI: spec addendum
+# trellis-crew CLI: spec addendum
 
-Status: draft, 2026-09-28. Extends the sage-crew plugin specification.
+Status: draft, 2026-09-28. Extends the trellis-crew plugin specification.
 Sources are listed at the end, each with its retrieval date. A fact the
 vendor's own documentation does not state is written as a gap.
 
@@ -8,7 +8,7 @@ vendor's own documentation does not state is written as a gap.
 
 A person who has never run two agent sessions at once types one command
 and gets a working team. The plugin carries the skills. The CLI, named
-`sage-crew`, does the three things the plugin cannot: it finds the agent
+`trellis-crew`, does the three things the plugin cannot: it finds the agent
 harness on the machine, installs the plugin the way that harness expects,
 and starts the right number of named sessions, each with its own kickoff
 message. The team then runs as separate sessions, not as subagents inside
@@ -18,14 +18,14 @@ touched.
 Commands:
 
 ```
-sage-crew install            # detect the harness, confirm it, install the plugin
-sage-crew update             # update the CLI and the plugin
-sage-crew start [--workers N] [--roles roles.yml]   # start the team
-sage-crew status             # list the team's sessions and their state
-sage-crew stop               # stop every session the CLI started
-sage-crew respawn <name> [--model M] [--effort E] [--autocompact N]
-                             # restart one session with new launch flags
-sage-crew --roles roles.yml  # shorthand for start with a roles file
+trellis-crew install            # detect the harness, confirm it, install the plugin
+trellis-crew update             # update the CLI and the plugin
+trellis-crew start [--workers N] [--roles sagespec.yml] # start the team
+trellis-crew status             # list the team's sessions and their state
+trellis-crew stop               # stop every session the CLI started
+trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N]
+                                # restart one session with new launch flags
+trellis-crew --roles sagespec.yml # shorthand for start with a roles file
 ```
 
 ## 1. Harness detection and confirmation
@@ -63,8 +63,8 @@ Use Claude Code? [Y/n/other]
 `--harness <name>` skips the question. `--non-interactive` takes the best
 candidate and prints the choice. With no candidate the CLI stops and
 prints the install page of each supported harness. The choice is written
-to `~/.sage-crew/config.yml` and reused until the reader runs
-`sage-crew install --reconfigure`.
+to `~/.trellis-crew/install.yml` and reused until the reader runs
+`trellis-crew install --reconfigure`.
 
 ### Transport follows the tier
 
@@ -78,8 +78,8 @@ the CLI fills it from the tier when the field says `auto`.
 
 The CLI starts each session as its own operating-system process, records
 the process id, the session name, and the harness's own session id in
-`~/.sage-crew/team.json`, and sends the kickoff message as the session's
-first prompt. `sage-crew status` reads that file. `sage-crew stop` ends
+`~/.trellis-crew/team.json`, and sends the kickoff message as the session's
+first prompt. `trellis-crew status` reads that file. `trellis-crew stop` ends
 each process it started and nothing else.
 
 Each session's launch flags come from its `autocompact`, `model`, and
@@ -115,7 +115,7 @@ On macOS and Linux the message travels over a per-session Unix domain
 socket, never through the vendor's servers. Inbound messages are governed
 by the `crossSessionInbound` setting, with `accept`, `hold`, or `refuse`.
 The CLI sets it to `accept` so a busy peer queues a message instead of
-asking a person to approve it. `sage-crew install` writes it into the
+asking a person to approve it. `trellis-crew install` writes it into the
 reader's Claude Code user settings file, `settings.json` in the
 configuration directory, after it copies that file to a dated backup
 beside it, and prints both paths. A user setting applies to every Claude
@@ -190,10 +190,10 @@ harness's MCP client configuration in `~/.codex/config.toml`. Each session
 polls the mailbox on its own schedule, because Codex has no open channel
 to wait on.
 
-The supervisor is a detached process. `sage-crew start` launches it and
+The supervisor is a detached process. `trellis-crew start` launches it and
 returns at once, as Claude Code's `--bg` does. The supervisor starts each
 `codex exec` process and keeps it alive. `team.json` records the
-supervisor's process id and each child's. `sage-crew stop` ends the
+supervisor's process id and each child's. `trellis-crew stop` ends the
 supervisor and its children.
 
 ### Amp, tier three
@@ -209,7 +209,7 @@ where every thread reads and writes the shared inbox.
 
 An Amp thread runs on the vendor's servers, so the CLI holds no local
 process for it, and no command to stop a thread is documented.
-`sage-crew stop` leaves each Amp thread running. For each one, it prints
+`trellis-crew stop` leaves each Amp thread running. For each one, it prints
 the thread id and a line that says the thread still runs.
 
 ### Every other tier-three harness
@@ -222,7 +222,7 @@ opens the file.
 
 ### Respawn
 
-`sage-crew respawn <name>` stops one session the CLI started and starts
+`trellis-crew respawn <name>` stops one session the CLI started and starts
 it again under the same name, with the flags given: `--model`,
 `--effort`, or `--autocompact`. A flag that is not given keeps the value
 from the roles file. The new session gets its kickoff message again and
@@ -234,8 +234,9 @@ gets the same warning as at `start`.
 
 ## 3. The default team
 
-Without a roles file, `sage-crew start` creates four reporter sessions
-and three workers. `--workers N` changes the count.
+Without a roles file, `trellis-crew start` creates four reporter sessions
+and three workers. A roles file is `./sagespec.yml` in the current folder,
+or the file named by `--roles`. `--workers N` changes the count.
 
 | Session | Role | Reports to | Autocompact | What it does |
 |---|---|---|---|---|
@@ -300,7 +301,7 @@ for a unit of work in one of two ways.
    the worker's own `model` and `effort` from the roles file. The lead
    picks the profile; no rule table picks one for it.
 2. A respawn, for a unit that must run on the worker's own model. The
-   lead runs `sage-crew respawn <name> --model <m> --effort <e>` between
+   lead runs `trellis-crew respawn <name> --model <m> --effort <e>` between
    units, as in section 2. The worker loses its context.
 
 On Claude Code, a subagent takes `model` on each call, and a subagent
@@ -337,8 +338,12 @@ as `gap: <reason>`, never as a guess.
 
 ## 4. The roles file
 
-`sage-crew --roles roles.yml` replaces the default team. The file is YAML.
-`roles.example.yml` in this repository matches the default team.
+A roles file replaces the default team. It is one half of a config: it
+sets the team layout, and the agent definitions in `skills/` are the other
+half. `trellis-crew start` reads
+`./sagespec.yml` by default, and `--roles <file>` names another file.
+The file is YAML. `sagespec.example.yml` in this repository matches the
+default team.
 
 | Field | Where | Required | Meaning |
 |---|---|---|---|
@@ -375,15 +380,15 @@ cannot tell which lead owns the new workers.
 
 ## 5. Install and update
 
-### `sage-crew install`
+### `trellis-crew install`
 
 1. Detect and confirm the harness, as in section 1.
 2. Install the plugin the way that harness documents:
 
 | Harness | Documented install path | Installed location |
 |---|---|---|
-| Claude Code | `claude plugin marketplace add <marketplace>` then `claude plugin install sage-crew@<marketplace>` | `~/.claude/plugins/` |
-| Qwen Code | `qwen extensions install <repository url>` | `~/.qwen/extensions/sage-crew/` |
+| Claude Code | `claude plugin marketplace add <marketplace>` then `claude plugin install trellis-crew@<marketplace>` | `~/.claude/plugins/` |
+| Qwen Code | `qwen extensions install <repository url>` | `~/.qwen/extensions/trellis-crew/` |
 | Hermes Agent | `hermes skills install <source>` | `~/.hermes/skills/` |
 | Codex CLI | copy each skill folder into `~/.agents/skills/` | `~/.agents/skills/<skill>/` |
 | Amp | `amp skill add <source> --global` | `~/.config/agents/skills/` |
@@ -391,7 +396,7 @@ cannot tell which lead owns the new workers.
 3. On Claude Code, copy the user settings file to a dated backup beside
    it, then set `crossSessionInbound` to `accept` in it, as in
    section 2. Print the file's path and the backup's path.
-4. Write `~/.sage-crew/config.yml` with the harness, the transport, and
+4. Write `~/.trellis-crew/install.yml` with the harness, the transport, and
    the installed plugin version.
 5. For a mailbox transport, write the MCP mailbox entry into the harness's
    own MCP configuration, or create the mailbox folder for the file
@@ -400,20 +405,20 @@ cannot tell which lead owns the new workers.
 The plugin is published on each harness's own plugin channel, never on a
 separate marketplace; that was decided in the plugin specification.
 
-### `sage-crew update`
+### `trellis-crew update`
 
 1. Compare the CLI's own version with the latest version published on
-   the npm registry under the package name `sage-crew`, and print both.
+   the npm registry under the package name `trellis-crew`, and print both.
 2. Update the plugin through the harness: `claude plugin update
-   sage-crew@<marketplace>` on Claude Code, `qwen extensions update` on
+   trellis-crew@<marketplace>` on Claude Code, `qwen extensions update` on
    Qwen Code, `hermes skills install` again on Hermes, `amp skill update
-   sage-crew` on Amp, and a fresh copy of the skill folders on Codex.
+   trellis-crew` on Amp, and a fresh copy of the skill folders on Codex.
 3. Print the harness's own update command without running it: `claude
    update`, `hermes update`, `amp update`, and the installer script for
    Codex. Gap: no update command for Qwen Code itself is documented.
-4. Rewrite the version fields in `~/.sage-crew/config.yml`.
+4. Rewrite the version fields in `~/.trellis-crew/install.yml`.
 
-`sage-crew update --check` prints the versions and changes nothing.
+`trellis-crew update --check` prints the versions and changes nothing.
 
 ## Decisions
 
@@ -421,14 +426,14 @@ The maintainer answered all four choices on 2026-09-28, on the pull
 request that carries this document.
 
 1. CLI language and packaging. Answer A: Node, run with
-   `npx sage-crew@latest` and installed with `npm install -g sage-crew`.
+   `npx trellis-crew@latest` and installed with `npm install -g trellis-crew`.
 2. The default worker count. Answer B: three workers. The maintainer's
    words: "workers leverage up to 20 subagents of their own; emphasize
    how the subagent workflow capacity scales." Applied in section 2.
 3. Whether `benchmark` and `research` start as two sessions. Answer A:
    split by default.
 4. Publishing. Answer A: under the maintainer's own npm account, with
-   the package name `sage-crew`, once the CLI's first version passes its
+   the package name `trellis-crew`, once the CLI's first version passes its
    gates. Nothing is published by the pull request that carries this
    document.
 
@@ -457,28 +462,35 @@ decision numbers.
   file outside the repository, named by the `SANITIZE_DENYLIST`
   environment variable, and in a CI secret with the same content. The
   list is never committed. An allowance for one file that a deny-listed
-  word names, such as the default config file of decision 12, lives in
+  word names, such as the default roles file of decision 12, lives in
   the same file and the same secret, not in the repository.
 - Decision 7: What `stop` does to an Amp thread. Answer B: it leaves the thread
   running and prints its id. Applied in section 2.
 - Decision 8: The minimum Node version. Answer B: Node 24, `engines.node >=24`.
 - Decision 9: How the lead sets a worker's model for one task. Answer C: task
-  profiles by default, and `sage-crew respawn` for a unit that must run
+  profiles by default, and `trellis-crew respawn` for a unit that must run
   on the worker's own model. Applied in sections 2, 3, and 4.
 - Decision 10: Who picks the model and effort for a task. Answer A: the lead names
   a profile in the hand-off. A hand-off without one uses the worker's
   own `model` and `effort`. Applied in section 3.
 - Decision 11: Model and effort in the default team. Answer A: none ship. The
-  fields stay unset, and `roles.example.yml` shows them commented out.
+  fields stay unset, and `sagespec.example.yml` shows them commented out.
   Applied in sections 3 and 4.
-- Decision 12: The project name and the default config file. The
-  operator decided: the project becomes `trellis-crew`, and the default
-  config file becomes `sagespec.yml`, in place of `roles.yml`. Not yet
-  applied in this document. After the operator renames the repository,
-  one change renames the command, the package, the state folder, and the
-  example file, makes the CLI read `./sagespec.yml` by default, and
-  turns `--roles <file>` into `--config <file>`. The operator publishes
-  the package under the new name.
+- Decision 12: The project name and the default roles file. The
+  operator decided: the project is renamed from `sage-crew` to
+  `trellis-crew`, and the default roles file is `sagespec.yml`, in place
+  of `roles.yml`. Applied throughout this document, and names in the
+  earlier decisions are updated to match: the command, the package, and
+  the state folder are `trellis-crew`, the example file is
+  `sagespec.example.yml`, the CLI reads `./sagespec.yml` by default, and
+  the flag that names another roles file is `--roles <file>` (decision 13).
+  The operator publishes the package under the new name.
+- Decision 13: The word "config". Answer A: a config is the roles file
+  plus the agent definitions, and "roles file" stays the name of
+  `sagespec.yml`. The flag that names another roles file is
+  `--roles <file>`. The install file is `~/.trellis-crew/install.yml`.
+  Applied in the command list and sections 1, 3, 4, and 5, and in
+  `sagespec.example.yml`.
 
 ## Gaps
 
@@ -548,5 +560,5 @@ decision numbers.
    https://ampcode.com/docs/customize/skills, retrieved 2026-09-28. The
    settings file path: https://ampcode.com/docs/cli/settings, retrieved
    2026-09-28.
-9. The three-tier table and the mailbox design: the sage-crew plugin
+9. The three-tier table and the mailbox design: the trellis-crew plugin
    specification, 2026-09-28.

@@ -1,6 +1,6 @@
 ---
 name: department-reporting-chain
-description: Runs the reporting-chain role in sage-crew, a multi-session team pattern. Carries one line to the operator for each decision that needs the operator's own answer, and writes every report as one status table. Use when a decision needs the operator's own answer or a report goes to the operator.
+description: Runs the reporting-chain role in trellis-crew, a multi-session team pattern. Carries one line to the operator for each decision that needs the operator's own answer, and writes every report as one status table. Use when a decision needs the operator's own answer or a report goes to the operator.
 ---
 
 ## The reporting-chain role
@@ -38,7 +38,7 @@ prose above it:
 
 ## Scaling advisor
 
-Once an hour, run `sage-crew scale` and carry its one advice row to
+Once an hour, run `trellis-crew scale` and carry its one advice row to
 the operator: scale up, scale down, hold, or rebalance, with the reason
 and the projected usage-window share at reset. Never start or stop a
 session on that advice; the operator decides. When the operator is the
@@ -47,7 +47,7 @@ bottleneck, the row is red and names the oldest waiting decision.
 ## Briefs
 
 At each scheduled edition time, take the edition file from the auditor,
-run `sage-crew brief <edition.json>`, and send the operator the HTML
+run `trellis-crew brief <edition.json>`, and send the operator the HTML
 file's path in one line.
 
 Trigger: a decision needs the operator's own answer, or a report goes
