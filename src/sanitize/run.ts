@@ -87,8 +87,39 @@ export function parseStagedDiff(diff: string): StagedFile[] {
   return files.filter((file) => file.lines.length > 0);
 }
 
-function isBinary(buffer: Buffer): boolean {
-  return buffer.subarray(0, 8000).includes(0);
+/**
+ * Decodes a file's bytes as text. UTF-8 is the default. A UTF-16 file,
+ * with a byte-order mark or with a zero byte in every other place, is
+ * decoded as UTF-16, because its zero bytes would otherwise mark it as
+ * binary and skip it. Any other file with a zero byte is binary, and
+ * returns undefined.
+ */
+export function decodeText(buffer: Buffer): string | undefined {
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString('utf16le');
+  if (buffer[0] === 0xfe && buffer[1] === 0xff) return Buffer.from(buffer.subarray(2)).swap16().toString('utf16le');
+  const sample = buffer.subarray(0, 8000);
+  if (!sample.includes(0)) return buffer.toString('utf8');
+  const order = utf16Order(sample);
+  if (order === 'le') return buffer.toString('utf16le');
+  if (order === 'be') return Buffer.from(buffer).swap16().toString('utf16le');
+  return undefined;
+}
+
+/** Names UTF-16 text with no byte-order mark: zero bytes in all odd places (LE) or all even places (BE). */
+function utf16Order(sample: Buffer): 'le' | 'be' | undefined {
+  if (sample.length < 2 || sample.length % 2 !== 0) return undefined;
+  let evenZeros = 0;
+  let oddZeros = 0;
+  for (let i = 0; i < sample.length; i += 1) {
+    if (sample[i] === 0) {
+      if (i % 2 === 0) evenZeros += 1;
+      else oddZeros += 1;
+    }
+  }
+  const pairs = sample.length / 2;
+  if (evenZeros === 0 && oddZeros >= pairs * 0.9) return 'le';
+  if (oddZeros === 0 && evenZeros >= pairs * 0.9) return 'be';
+  return undefined;
 }
 
 const CANNOT_READ = Symbol('cannot read');
@@ -103,8 +134,7 @@ function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
     const stat = lstatSync(abs);
     if (stat.isSymbolicLink()) return readlinkSync(abs);
     if (!stat.isFile()) return undefined;
-    const buffer = readFileSync(abs);
-    return isBinary(buffer) ? undefined : buffer.toString('utf8');
+    return decodeText(readFileSync(abs));
   } catch {
     return CANNOT_READ;
   }

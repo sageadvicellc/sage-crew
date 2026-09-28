@@ -281,6 +281,28 @@ describe('sanitize run', () => {
     expect((await sanitize(deny.root, allowed, 'HEAD~2..HEAD')).code).toBe(0);
   });
 
+  it('a UTF-16 file is decoded and scanned, and a real binary file is still skipped', async () => {
+    const leak = `see ${fake.macHome}/x\n`;
+    const utf16be = (text: string) => Buffer.from(text, 'utf16le').swap16();
+    const files: Array<[string, Buffer]> = [
+      ['le-bom.txt', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(leak, 'utf16le')])],
+      ['be-bom.txt', Buffer.concat([Buffer.from([0xfe, 0xff]), utf16be(leak)])],
+      ['le-plain.txt', Buffer.from(leak, 'utf16le')],
+    ];
+    for (const [name, bytes] of files) {
+      const repo = makeFixtureRepo();
+      writeFileSync(join(repo.root, name), bytes);
+      repo.commit('chore: add file');
+      const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      expect(result.code, name).toBe(1);
+      expect(result.err, name).toContain(`private-path: ${name}:1`);
+    }
+    const binary = makeFixtureRepo();
+    writeFileSync(join(binary.root, 'image.bin'), Buffer.from([0x89, 0x50, 0x00, 0x00, 0x00, 0x0d, 0xff, 0x00, 0x01]));
+    binary.commit('chore: add binary');
+    expect((await sanitize(binary.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD')).code).toBe(0);
+  });
+
   it('a tracked file it cannot read fails the run and is named', async () => {
     const locked = makeFixtureRepo();
     locked.write('clean.md', 'nothing\n');
