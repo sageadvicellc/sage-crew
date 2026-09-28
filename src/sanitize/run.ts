@@ -53,6 +53,9 @@ function makeGit(runner: Runner, cwd: string, vars: SanitizeOptions['vars']): Gi
   };
 }
 
+/** The commit fields scanned as identities, in `git log` format order. */
+const IDENTITY_FIELDS = ['author name', 'author email', 'committer name', 'committer email'] as const;
+
 /** A full SHA-1 or SHA-256 commit id. Nothing else reaches git as a commit. */
 const COMMIT_ID = /^[0-9a-f]{40,64}$/;
 
@@ -289,7 +292,7 @@ function print(findings: Finding[], err: (line: string) => void): void {
   }
 }
 
-/** Runs every check on tracked files, the staged diff, and commit messages. Returns the exit code. */
+/** Runs every check on tracked files, the staged diff, and each commit's message, author, committer, and added lines. Returns the exit code. */
 export async function runSanitize(opts: SanitizeOptions): Promise<number> {
   const top = await opts.runner.run('git', ['rev-parse', '--show-toplevel'], { cwd: opts.cwd, env: opts.vars });
   if (top.code !== 0) {
@@ -371,15 +374,30 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     }
     for (const sha of shas) {
       const short = sha.slice(0, 7);
-      const message = await git(['log', '-1', '--format=%B', '--end-of-options', sha, '--']);
-      if (!message.ok) failures.push(`cannot read the message of commit ${short}`);
-      messages += 1;
-      findings.push(
-        ...scanText(message.stdout.trimEnd(), {
-          where: `commit ${short} message`,
-          ...(deny.list ? { deny: deny.list } : {}),
-        }),
-      );
+      // The author and committer names and emails, then the message, split
+      // on NUL. None of the four fields can hold a NUL.
+      const commit = await git(['log', '-1', '--format=%an%x00%ae%x00%cn%x00%ce%x00%B', '--end-of-options', sha, '--']);
+      const fields = commit.stdout.split('\0');
+      if (!commit.ok || fields.length < IDENTITY_FIELDS.length + 1) {
+        failures.push(`cannot read the message and authors of commit ${short}`);
+      } else {
+        IDENTITY_FIELDS.forEach((field, index) => {
+          const found = scanText(fields[index] as string, {
+            where: `commit ${short} ${field}`,
+            identity: true,
+            ...(deny.list ? { deny: deny.list } : {}),
+          });
+          // A field is one value, so a finding names the field and no line.
+          findings.push(...found.map((finding) => ({ ...finding, line: 0 })));
+        });
+        messages += 1;
+        findings.push(
+          ...scanText(fields.slice(IDENTITY_FIELDS.length).join('\0').trimEnd(), {
+            where: `commit ${short} message`,
+            ...(deny.list ? { deny: deny.list } : {}),
+          }),
+        );
+      }
 
       // The added lines. A leak added in one commit and removed in a later
       // one stays in history, so the tree scan misses it.
@@ -413,7 +431,7 @@ export async function runSanitize(opts: SanitizeOptions): Promise<number> {
     return 1;
   }
   opts.out(
-    `sanitize: clean. ${tracked.length} tracked files, ${staged.length} staged files, ${messages} commit messages and the added lines of ${commitsScanned} commits${range ? ` in ${range}` : ''}.`,
+    `sanitize: clean. ${tracked.length} tracked files, ${staged.length} staged files, ${messages} commit messages and authors, and the added lines of ${commitsScanned} commits${range ? ` in ${range}` : ''}.`,
   );
   return 0;
 }

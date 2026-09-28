@@ -182,10 +182,11 @@ licence.
 ## The sanitizer
 
 This repository is public. The sanitizer keeps private text out of it.
-Run it with `npm run sanitize`. It scans every tracked file, the staged
-diff, and the messages and added lines of a range of commits. So a leak
-that one commit adds and a later commit removes still fails. It fails on
-four classes of text.
+Run it with `npm run sanitize`. It scans every tracked file and the
+staged diff. For each commit in a range, it scans the message, the added
+lines, and the author and committer names and emails. So a leak that one
+commit adds and a later commit removes still fails. It fails on four
+classes of text.
 
 1. Secrets: an API key or token prefix followed by a full key, a
    private-key block, a committed `.env` file, and a password inside a
@@ -210,12 +211,19 @@ content from the `SANITIZE_DENYLIST_CONTENT` repository secret.
 - A line that starts with `#` is a comment.
 - A line `allow <path> <term>` clears one term in one file. The path is
   relative to the repository root. The allowance never applies to a
-  commit message.
+  commit message or to a commit author or committer.
+- A line `allow @author <term>` clears one term in the commit author and
+  committer names and emails. It clears nothing else. The same term
+  still fails in a file, a file name, a commit message, or an added
+  line. `@author` is a keyword, not a path, so it never clears a file
+  named `@author`. The term matches in any letter case, and only as a
+  whole word.
 
 ```
 # deny-list
 project-codename
 allow docs/history.md project-codename
+allow @author project-codename
 ```
 
 When `SANITIZE_DENYLIST` is unset, a local run prints a warning and still

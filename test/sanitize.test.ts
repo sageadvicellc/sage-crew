@@ -120,6 +120,27 @@ describe('sanitize checks', () => {
 
   it('58: a malformed deny-list line is an error', () => {
     expect(parseDenyList('allow only-a-path\n').errors).toHaveLength(1);
+    expect(parseDenyList('allow @author\n').errors).toHaveLength(1);
+  });
+
+  it('allow @author clears one term in the author and committer fields only', () => {
+    const other = ['another', 'internal', 'word'].join('-');
+    const list = denyList(`${other}\nallow @author ${TERM.toUpperCase()}\n`);
+    const identity = { where: 'commit abc1234 author email', identity: true, deny: list };
+    expect(scanText(`${TERM}@example.invalid`, identity)).toEqual([]);
+    expect(scanText(`${other}@example.invalid`, identity)).toHaveLength(1);
+    // Whole word only: a longer word that holds the term is not cleared or matched.
+    expect(scanText(`pre${TERM}@example.invalid`, identity)).toEqual([]);
+    // The same term still fails in a message, a file, a file name, and a
+    // file whose path is literally @author.
+    expect(scanText(`${TERM} here`, { where: 'commit abc1234 message', deny: list })).toHaveLength(1);
+    expect(scanText(`${TERM} here`, { where: 'docs/a.md', path: 'docs/a.md', deny: list })).toHaveLength(1);
+    expect(scanText(`${TERM} here`, { where: '@author', path: '@author', deny: list })).toHaveLength(1);
+    expect(scanPath(`docs/${TERM}.md`, { deny: list })).toHaveLength(1);
+    expect(scanPath('@author', { deny: denyList(`allow @author ${TERM}\n`) })).toEqual([]);
+    // A path allowance never clears an identity field.
+    const byPath = denyList(`allow docs/a.md ${TERM}\n`);
+    expect(scanText(`${TERM}@example.invalid`, { where: 'commit abc1234 author email', identity: true, deny: byPath })).toHaveLength(1);
   });
 
   it('the committed allowlist clears a reviewed file for one non-deny-list class', () => {
@@ -211,6 +232,70 @@ describe('sanitize run', () => {
     expect(result.err).toMatch(/deny-list: docs\/b\.md:1/);
     expect(result.err).not.toMatch(/docs\/a\.md/);
     expect(result.err).not.toContain(TERM);
+  });
+
+  it('a deny-listed term in a commit author or committer field fails, and never prints the field', async () => {
+    const email = `${TERM}@example.invalid`;
+    const author = makeFixtureRepo();
+    author.write('clean.md', 'nothing\n');
+    author.git('add', '-A');
+    author.git('commit', '-q', '-m', 'chore: start', `--author=Fixture Author <${email}>`);
+    const a = await sanitize(author.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(a.code).toBe(1);
+    expect(a.err).toMatch(/deny-list: commit [0-9a-f]{7} author email: deny-listed term/);
+    expect(a.err).not.toMatch(/author name|committer/);
+    expect(a.err).not.toContain(TERM);
+
+    const committer = makeFixtureRepo();
+    committer.write('clean.md', 'nothing\n');
+    committer.git('add', '-A');
+    committer.git('-c', `user.name=${TERM}`, 'commit', '-q', '-m', 'chore: start');
+    const c = await sanitize(committer.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(c.code).toBe(1);
+    expect(c.err).toMatch(/deny-list: commit [0-9a-f]{7} committer name: deny-listed term/);
+    expect(c.err).toMatch(/deny-list: commit [0-9a-f]{7} author name: deny-listed term/);
+  });
+
+  it('allow @author clears the author fields, but the same term in a message or a file still fails', async () => {
+    const email = `${TERM}@example.invalid`;
+    const vars = { SANITIZE_DENYLIST: denyFile(`allow @author ${TERM}\n`) };
+    const make = () => {
+      const repo = makeFixtureRepo();
+      repo.write('clean.md', 'nothing\n');
+      return repo;
+    };
+    const commitAs = (repo: ReturnType<typeof make>, message: string) => {
+      repo.git('add', '-A');
+      repo.git('-c', `user.name=${TERM}`, '-c', `user.email=${email}`, 'commit', '-q', '-m', message);
+    };
+
+    const onlyAuthor = make();
+    commitAs(onlyAuthor, 'chore: start');
+    const clean = await sanitize(onlyAuthor.root, vars, 'HEAD');
+    expect(clean.err).toBe('');
+    expect(clean.code).toBe(0);
+
+    const inMessage = make();
+    commitAs(inMessage, `chore: ask ${TERM}`);
+    const m = await sanitize(inMessage.root, vars, 'HEAD');
+    expect(m.code).toBe(1);
+    expect(m.err).toMatch(/deny-list: commit [0-9a-f]{7} message:1/);
+    expect(m.err).not.toMatch(/author|committer/);
+
+    const inFile = make();
+    inFile.write('notes.md', `${TERM}\n`);
+    commitAs(inFile, 'chore: start');
+    const f = await sanitize(inFile.root, vars, 'HEAD');
+    expect(f.code).toBe(1);
+    expect(f.err).toMatch(/deny-list: notes\.md:1/);
+
+    const namedAuthor = make();
+    namedAuthor.write('@author', `${TERM}\n`);
+    commitAs(namedAuthor, 'chore: start');
+    const n = await sanitize(namedAuthor.root, vars, 'HEAD');
+    expect(n.code).toBe(1);
+    expect(n.err).toMatch(/deny-list: @author:1/);
+    expect(n.err).toMatch(/deny-list: @author \(commit [0-9a-f]{7}\):1/);
   });
 
   it('59: an unset SANITIZE_DENYLIST warns, names the variable, and still runs the other checks', async () => {

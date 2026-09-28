@@ -33,8 +33,14 @@ export interface Allowance {
 
 export interface DenyList {
   terms: DenyTerm[];
+  /** `allow <path> <term>` lines: one term cleared in one file. */
   allowances: Allowance[];
+  /** `allow @author <term>` lines: the lowercased terms cleared in commit author and committer fields only. */
+  authorAllowances: string[];
 }
+
+/** The word in `allow @author <term>`. It is a keyword, never a file path. */
+export const AUTHOR_ALLOW = '@author';
 
 /** One reviewed false positive from the committed allowlist. */
 export interface AllowEntry {
@@ -51,6 +57,8 @@ export interface ScanContext {
   allow?: readonly AllowEntry[];
   /** The real line number of each scanned line, for a diff. Defaults to 1, 2, 3... */
   lineNumbers?: readonly number[];
+  /** True for a commit author or committer field. Only `allow @author` lines apply to it. */
+  identity?: boolean;
 }
 
 interface Pattern {
@@ -135,14 +143,21 @@ function termPattern(term: string): RegExp {
  * Parses the deny-list file. One term per line, matched case-insensitively
  * as a whole word. A line starting with `#` is a comment. A line
  * `allow <repo-relative path> <term>` clears that one term in that one file.
+ * A line `allow @author <term>` clears that one term in commit author and
+ * committer fields, and nowhere else. It never applies to a file path, even
+ * a file named `@author`.
  */
 export function parseDenyList(text: string): { list: DenyList; errors: string[] } {
-  const list: DenyList = { terms: [], allowances: [] };
+  const list: DenyList = { terms: [], allowances: [], authorAllowances: [] };
   const errors: string[] = [];
   text.split(/\r?\n/).forEach((raw, index) => {
     const line = raw.trim();
     if (line === '' || line.startsWith('#')) return;
     const allow = /^allow\s+(\S+)\s+(\S.*)$/.exec(line);
+    if (allow && allow[1] === AUTHOR_ALLOW) {
+      list.authorAllowances.push((allow[2] as string).trim().toLowerCase());
+      return;
+    }
     if (allow) {
       list.allowances.push({ path: allow[1] as string, key: (allow[2] as string).trim().toLowerCase() });
       return;
@@ -188,7 +203,9 @@ function allowed(ctx: ScanContext, cls: FindingClass): boolean {
 }
 
 function denyAllowed(ctx: ScanContext, term: DenyTerm): boolean {
-  if (ctx.path === undefined || ctx.deny === undefined) return false;
+  if (ctx.deny === undefined) return false;
+  if (ctx.identity) return ctx.deny.authorAllowances.includes(term.key);
+  if (ctx.path === undefined) return false;
   return ctx.deny.allowances.some((a) => a.path === ctx.path && a.key === term.key);
 }
 
