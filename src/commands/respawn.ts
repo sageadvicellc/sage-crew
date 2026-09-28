@@ -4,6 +4,8 @@ import {
   CLAUDE_AUTOCOMPACT_MAX,
   CLAUDE_AUTOCOMPACT_MIN,
   CLAUDE_EFFORTS,
+  EFFORT_PATTERN,
+  MODEL_PATTERN,
   parseAutocompact,
   type HarnessId,
 } from '../roles/schema.ts';
@@ -21,7 +23,12 @@ export interface RespawnOptions {
 /** Checks the flag values against the harness's bounds. Returns the problems found. */
 export function checkRespawnFlags(options: RespawnOptions, harness: HarnessId): string[] {
   const problems: string[] = [];
-  if (options.model !== undefined && options.model.trim() === '') problems.push('--model needs a model name');
+  if (options.model !== undefined) {
+    if (options.model.trim() === '') problems.push('--model needs a model name');
+    else if (!MODEL_PATTERN.test(options.model)) {
+      problems.push('--model must start with a letter or digit, use only letters, digits, and . _ : / @ [ ] -, and be at most 128 characters');
+    }
+  }
   if (options.autocompact !== undefined) {
     const parsed = parseAutocompact(options.autocompact);
     if (!parsed.ok) {
@@ -36,6 +43,7 @@ export function checkRespawnFlags(options: RespawnOptions, harness: HarnessId): 
   }
   if (options.effort !== undefined) {
     if (options.effort.trim() === '') problems.push('--effort needs a level');
+    else if (!EFFORT_PATTERN.test(options.effort)) problems.push('--effort must start with a letter or digit and use only letters, digits, _ and -');
     else if (harness === 'claude-code' && !(CLAUDE_EFFORTS as readonly string[]).includes(options.effort)) {
       problems.push(`--effort on Claude Code must be one of ${CLAUDE_EFFORTS.join(', ')}, not "${options.effort}"`);
     }

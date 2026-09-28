@@ -44,7 +44,7 @@ export function parseBgSessionId(_stdout: string): string | null {
 
 /**
  * Claude Code, tier one. Each session starts with
- * `claude --bg --name <name> [--autocompact v] [--model m] [--effort e] "<kickoff>"`.
+ * `claude --bg --name <name> [--autocompact v] [--model m] [--effort e] -- "<kickoff>"`.
  * `--bg` returns at once and cannot be combined with `-p`.
  */
 export const claudeCodeAdapter: Adapter = {
@@ -53,7 +53,8 @@ export const claudeCodeAdapter: Adapter = {
   flags: { autocompact: '--autocompact', model: '--model', effort: '--effort' },
 
   async launch(name, kickoff, flagArgs, ctx) {
-    const result = await ctx.runner.run(ctx.binaryPath, ['--bg', '--name', name, ...flagArgs, kickoff], {
+    // `--` ends the options, so the kickoff is always the prompt and never an option.
+    const result = await ctx.runner.run(ctx.binaryPath, ['--bg', '--name', name, ...flagArgs, '--', kickoff], {
       env: ctx.env.vars,
       cwd: ctx.env.cwd,
       timeoutMs: CLAUDE_LAUNCH_TIMEOUT_MS,

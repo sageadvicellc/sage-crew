@@ -4,8 +4,11 @@ import {
   CLAUDE_AUTOCOMPACT_MIN,
   CLAUDE_EFFORTS,
   CLOCK_PATTERN,
+  EFFORT_PATTERN,
   HARNESS_IDS,
   isHarnessId,
+  kickoffLooksLikeOption,
+  MODEL_PATTERN,
   NAME_PATTERN,
   OPERATOR,
   parseAutocompact,
@@ -107,10 +110,22 @@ function checkOptionalString(c: Checker, map: YAMLMap, key: string, fallback: nu
   return value;
 }
 
-function checkEffort(c: Checker, node: AnyNode, effort: string, where: string, harness: HarnessId | undefined): void {
+function checkEffort(c: Checker, node: AnyNode, effort: string, where: string, harness: HarnessId | undefined): boolean {
   if (harness === 'claude-code' && !(CLAUDE_EFFORTS as readonly string[]).includes(effort)) {
     c.fail(node, `${where}: effort on Claude Code must be one of ${CLAUDE_EFFORTS.join(', ')}, not "${effort}"`);
+    return false;
   }
+  if (!EFFORT_PATTERN.test(effort)) {
+    c.fail(node, `${where}: effort must start with a letter or digit and use only letters, digits, _ and -`);
+    return false;
+  }
+  return true;
+}
+
+function checkModel(c: Checker, node: AnyNode, model: string, where: string): boolean {
+  if (MODEL_PATTERN.test(model)) return true;
+  c.fail(node, `${where}: model must start with a letter or digit, use only letters, digits, and . _ : / @ [ ] -, and be at most 128 characters`);
+  return false;
 }
 
 function checkTaskProfiles(c: Checker, map: YAMLMap, harness: HarnessId | undefined): Record<string, TaskProfile> {
@@ -136,6 +151,7 @@ function checkTaskProfiles(c: Checker, map: YAMLMap, harness: HarnessId | undefi
       continue;
     }
     if (effort !== undefined) checkEffort(c, at, effort, `task profile "${name}"`, harness);
+    if (model !== undefined) checkModel(c, at, model, `task profile "${name}"`);
     profiles[name] = { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) };
   }
   return profiles;
@@ -184,6 +200,9 @@ function checkSession(c: Checker, node: unknown, harness: HarnessId | undefined)
   const kickoff = scalarString(pairs.kickoff);
   if (kickoff === undefined || kickoff.trim() === '') {
     c.fail(keyNode(pairs.kickoff), `${label}: kickoff must be a non-empty message`, at);
+    valid = false;
+  } else if (kickoffLooksLikeOption(kickoff)) {
+    c.fail(keyNode(pairs.kickoff), `${label}: kickoff must not start with "-", which a harness could read as an option`, at);
     valid = false;
   }
 
@@ -236,7 +255,8 @@ function checkSession(c: Checker, node: unknown, harness: HarnessId | undefined)
 
   const model = checkOptionalString(c, node, 'model', at);
   const effort = checkOptionalString(c, node, 'effort', at);
-  if (effort !== undefined) checkEffort(c, keyNode(pairs.effort), effort, label, harness);
+  if (effort !== undefined && !checkEffort(c, keyNode(pairs.effort), effort, label, harness)) valid = false;
+  if (model !== undefined && !checkModel(c, keyNode(pairs.model), model, label)) valid = false;
 
   // An invalid session still joins the team checks under its name, so one
   // mistake does not cascade into errors about the sessions that name it.

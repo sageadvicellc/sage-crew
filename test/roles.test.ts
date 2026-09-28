@@ -142,6 +142,27 @@ describe('roles file', () => {
     expectFailAt(profile, lineOf(profile, 'deep:'), /effort/, 'claude-code');
   });
 
+  it('a model or kickoff that could read as a command-line option fails', () => {
+    for (const model of ['--dangerously-skip-permissions', '-x', 'model a', 'model;rm', 'model$(x)', 'a'.repeat(129)]) {
+      const text = SMALL_TEAM.replace('autocompact: 400k', `autocompact: 400k\n    model: "${model}"`);
+      expectFailAt(text, lineOf(text, 'model: '), /model/);
+    }
+    for (const model of ['model-a', 'provider/model-1.5', 'model:tag', 'model_b', 'claude-model[1m]']) {
+      const text = SMALL_TEAM.replace('autocompact: 400k', `autocompact: 400k\n    model: "${model}"`);
+      expect(errorsOf(text), model).toEqual([]);
+    }
+    const profile = SMALL_TEAM.replace('sessions:', 'task_profiles:\n  bad: {model: "--flag"}\nsessions:');
+    expectFailAt(profile, lineOf(profile, 'bad:'), /model/);
+    for (const effort of ['--x', 'very high']) {
+      const text = SMALL_TEAM.replace('autocompact: 400k', `autocompact: 400k\n    effort: "${effort}"`);
+      expectFailAt(text, lineOf(text, 'effort: '), /effort/);
+    }
+    const kickoff = SMALL_TEAM.replace('You carry decisions up.', '--allowedTools=Bash do things');
+    expectFailAt(kickoff, lineOf(kickoff, 'kickoff: |'), /kickoff/);
+    const indented = SMALL_TEAM.replace('kickoff: |\n      You carry decisions up.', 'kickoff: "   -x"');
+    expect(errorsOf(indented).some((e) => /kickoff/.test(e.message))).toBe(true);
+  });
+
   it('13: any failure spawns nothing', async () => {
     const env = makeTestEnv();
     const file = join(env.cwd, 'bad.yml');

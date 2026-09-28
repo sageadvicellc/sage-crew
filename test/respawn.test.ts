@@ -81,6 +81,9 @@ describe('respawn', () => {
       ['respawn', 'helper-a', '--autocompact', '99k'],
       ['respawn', 'helper-a', '--effort', 'extreme'],
       ['respawn', 'helper-a', '--model', ''],
+      ['respawn', 'helper-a', '--model=--dangerously-skip-permissions'],
+      ['respawn', 'helper-a', '--model', 'model a'],
+      ['respawn', 'helper-a', '--effort=-x'],
     ];
     for (const argv of cases) {
       expect(await main(argv, t.deps), argv.join(' ')).toBe(2);

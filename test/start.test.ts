@@ -40,7 +40,9 @@ describe('start on Claude Code', () => {
       '--bg', '--name', 'helper-a', '--autocompact', '400k', '--model', 'model-a', '--effort', 'high',
     ]);
     const chain = runs.find((c) => c.args[2] === 'chain');
-    expect(chain?.args).toEqual(['--bg', '--name', 'chain', chain?.args.at(-1)]);
+    expect(chain?.args).toEqual(['--bg', '--name', 'chain', '--', chain?.args.at(-1)]);
+    // The kickoff always follows `--`, so claude never reads it as an option.
+    for (const call of runs) expect(call.args.at(-2)).toBe('--');
   });
 
   it('45: the Claude Code bounds apply at start, and a failure starts nothing', async () => {

@@ -22,6 +22,21 @@ export type Role = (typeof ROLES)[number];
 /** A session name: lowercase letters, digits, and hyphens, starting with a letter. */
 export const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 
+/**
+ * A model name: a letter or digit first, then letters, digits, and
+ * `.` `_` `:` `/` `@` `[` `]` `-`, at most 128 characters. It never starts
+ * with `-`, so a harness never reads it as a command-line option.
+ */
+export const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
+
+/** An effort level on any harness: a letter or digit first, then letters, digits, `_`, and `-`. */
+export const EFFORT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+
+/** True when a kickoff message would start with `-` and could read as an option. */
+export function kickoffLooksLikeOption(kickoff: string): boolean {
+  return kickoff.trimStart().startsWith('-');
+}
+
 /** The `reports_to` value for the person every decision goes to. */
 export const OPERATOR = 'operator';
 
