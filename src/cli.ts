@@ -3,6 +3,8 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseCommand, USAGE } from './args.ts';
 import { envFromProcess, type Env } from './env.ts';
+import { loadTeam } from './roles/load.ts';
+import type { RolesConfig } from './roles/schema.ts';
 import { createRunner, type Runner } from './runner.ts';
 
 /** Success. */
@@ -17,6 +19,17 @@ export interface CliDeps {
   runner: Runner;
   out: (line: string) => void;
   err: (line: string) => void;
+  /**
+   * Launches a validated team. Launching arrives in plan step 8. Tests pass
+   * a stand-in here.
+   */
+  startTeam?: (config: RolesConfig, deps: CliDeps) => Promise<number>;
+}
+
+/** The launch step until plan step 8 builds it. */
+async function startNotBuilt(_config: RolesConfig, deps: CliDeps): Promise<number> {
+  deps.err('trellis-crew start: the roles file is valid, but launching sessions is not built yet');
+  return EXIT_RUNTIME;
 }
 
 function packageVersion(): string {
@@ -42,6 +55,19 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
     case 'version':
       deps.out(packageVersion());
       return EXIT_OK;
+    case 'start': {
+      const loaded = loadTeam({
+        env: deps.env,
+        ...(command.roles === undefined ? {} : { roles: command.roles }),
+        ...(command.workers === undefined ? {} : { workers: command.workers }),
+        mergeReporters: command.mergeReporters,
+      });
+      if (!loaded.ok) {
+        for (const line of loaded.lines) deps.err(line);
+        return EXIT_USAGE;
+      }
+      return (deps.startTeam ?? startNotBuilt)(loaded.config, deps);
+    }
     default:
       deps.err(`trellis-crew ${command.name}: not built yet`);
       return EXIT_RUNTIME;
