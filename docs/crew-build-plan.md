@@ -4,7 +4,7 @@ Status: draft for the maintainer's review, 2026-09-29. This is a plan only. It h
 
 ## A. Purpose and scope
 
-This plan turns `docs/crew-addendum.md` into small pull requests. Each one adds a thin piece that a test or a user can run. The plan covers `trellis-crew up`, `spawn`, `down`, the `crew.yml` file, role modules, the start plan, and the Claude Code adapter. The Codex and Cursor adapters come last and stay off. Group D holds the changes that wait on the coordinator spec, which is not yet published. It stays blocked.
+This plan turns `docs/crew-addendum.md` into small pull requests. Each one adds a thin piece that a test or a user can run. The plan covers `trellis-crew up`, `spawn`, `down`, the `crew.yml` file, role modules, the start plan, and the Claude Code adapter. The Codex and Cursor adapters come last and stay off. Group D holds the crew changes that wait on the coordinator, which is a separate tool that will start more than one part, crew being one of them. Its spec is not yet published, so group D stays blocked.
 
 Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/cli-addendum.md`, and the code in `src` and `test`. The existing code already provides a `Runner` (`src/runner.ts`), an `Adapter` interface (`src/adapters/types.ts`), `team.json` (`src/store/team-json.ts`), `install.yml`, a probe (`src/detect/probe.ts`), and a sanitizer (`src/sanitize`). The plan reuses them and extends them without breaking them.
 
@@ -16,7 +16,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Every test uses the existing home guard (`test/setup/home-guard.ts`) and temporary folders. No test touches the real home folder.
 - Slices 1 to 8 must not change the output of `install`, `start`, `status`, `stop`, `respawn`, or `update`. The existing test files for those commands must pass unchanged.
 - Each command adds its own `USAGE` assertion in its own slice, so the assertion is red before the command exists.
-- A name that becomes part of a path uses only the characters `a` to `z`, `0` to `9`, and `-`. This is the "path-safe name rule". Session names, role names, and skill names follow it.
+- A name that becomes part of a path uses only the characters `a` to `z`, `0` to `9`, and `-`. It must start with a letter or a digit, so it can never reach a command as an option. It has a length cap (question Q13). This is the "path-safe name rule". Session names, role names, and skill names follow it.
 - A term is defined at first use. A "start plan" is a data file that `up` writes and `spawn` reads. A "lane" is one background session of a role. A "front role" is the role that runs in the foreground.
 
 ## B. Vertical slices, in build order
@@ -27,7 +27,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum section 2, checks that need no other file.
 - Tests first, `test/crew-yml.test.ts`.
   - Red: a valid file parses. A missing `version` or `harness` fails. An unknown field fails, including `harness` on a role entry. Setting both or neither of `crew.path` and `crew.git` fails. `crew.git` accepts only `https://`, `ssh://`, and `git@host:` forms. `front` must name exactly one entry, and that entry cannot have `lanes` above 1. Each role entry sets exactly one of `role` and `builtin`. `builtin` accepts only `lead`, `standby`, `auditor`, and `reporting-chain`, and any other value fails. A `builtin` entry needs `kickoff` and a `role` entry cannot set it. `restricted` must be a boolean and defaults to `false`. `role` names allow only lowercase letters, digits, and hyphens. `lanes` accepts 1 to 10. `permission_mode` accepts the five listed values and rejects `bypassPermissions`. `harness: codex` and `harness: cursor` fail with the message "not built yet". Each error names file, line, field, and reason.
-  - Red, path-safe name rule: `roles[].name` accepts only `a` to `z`, `0` to `9`, and `-`, and it cannot be empty. These values each fail: `../../.ssh`, `a/b`, `a\b`, `.hidden`, `Name`, `a b`, and a name with a control character.
+  - Red, path-safe name rule: `roles[].name` accepts only `a` to `z`, `0` to `9`, and `-`, it must start with a letter or a digit, and it cannot be empty. These values each fail: `../../.ssh`, `a/b`, `a\b`, `.`, `..`, `.hidden`, `-x`, `--x`, `Name`, `a b`, a name with a control character, and a name with a Unicode lookalike, such as a Cyrillic `а` or a full-width `-`. A name over the length cap fails, and a name exactly at the cap passes.
   - Skipped until slice 4: two sessions with one name fail.
   - Green: a schema module and a loader that use the `yaml` package already in `package.json`, with line numbers from its line counter.
 - Files: add `src/crew/schema.ts`, `src/crew/load.ts`, `test/crew-yml.test.ts`, `test/helpers/crew.ts`. Change nothing else.
@@ -43,7 +43,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum section 4.
 - Tests first, `test/crew-module.test.ts`.
   - Red: a valid module loads. A missing `role.md` or `catalog.yml` fails. A non-regular file fails. A catalog `path` that is absolute, has `..`, or is a symbolic link leaving the module fails. A skill `path` that does not name an existing `SKILL.md` fails. A missing `start.prompt` fails and a missing `start.name` passes. A file in `memory/` that is not a regular `.md` file fails. Memory over 256 KiB total fails and exactly 256 KiB passes.
-  - Red, path-safe name rule: a catalog skill `name` accepts only `a` to `z`, `0` to `9`, and `-`. These skill names each fail: `..`, `../x`, `a/b`, `.hidden`, `Name`, and an empty name. A module folder name that breaks the rule fails too.
+  - Red, path-safe name rule: a catalog skill `name` follows the rule from the working rules, including the start character and the length cap. These skill names each fail: `.`, `..`, `../x`, `a/b`, `.hidden`, `-x`, `Name`, a Unicode lookalike, and an empty name. A module folder name that breaks the rule fails too.
   - Green: a module reader with real-path checks, built on temporary folders.
 - Files: add `src/crew/module.ts`, `test/crew-module.test.ts`. Extend `test/helpers/crew.ts`.
 - Extra gates: G.
@@ -70,7 +70,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Goal: expand the checked config into the list of sessions, with names and lanes.
 - Spec: addendum sections 2 and 6.
 - Tests first, `test/crew-sessions.test.ts`.
-  - Red: `lanes` of 1 gives the plain `name`. `lanes` of 3 gives `<name>-1` to `<name>-3`. The default `name` is the `role` or `builtin` value. The front role always has one lane. A name clash between two sessions fails, including a clash created by a lane suffix. Every final session name, lane suffix included, follows the path-safe name rule. Then turn on the skipped test in `test/crew-yml.test.ts`.
+  - Red: `lanes` of 1 gives the plain `name`. `lanes` of 3 gives `<name>-1` to `<name>-3`. The default `name` is the `role` or `builtin` value. The front role always has one lane. A name clash between two sessions fails, including a clash created by a lane suffix. Every final session name, lane suffix included, follows the path-safe name rule and stays under the final-name length cap (question Q13). A base name at its cap with the longest lane suffix passes, and one character more fails. Then turn on the skipped test in `test/crew-yml.test.ts`.
   - Green: a pure expansion function.
 - Files: add `src/crew/sessions.ts`, `test/crew-sessions.test.ts`. Change `src/crew/load.ts` to call it.
 - Extra gates: G.
@@ -84,10 +84,10 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum section 3.
 - Tests first, `test/crew-repo.test.ts`, with the recording runner in `test/helpers/recording-runner.ts`.
   - Red: `TRELLIS_CREW_PATH` overrides both fields. `crew.path` resolves against the project root and `~` expands. The folder must hold `roles/`. `crew.git` uses one cache folder per URL hash. The first `up` clones. A later `up` reuses the clone. `--update` fetches and checks out `crew.ref`. The loaded commit is printed. A cache with local changes stops the run and names `up --update`. No step runs code from the crew repository. Each role in `crew.yml` must name a folder under `roles/`, and each module passes slice 2.
-  - Red, git safety: a `crew.ref` that starts with `-` fails. A `crew.git` value that starts with `-` fails. Every `git` call passes the ref and the URL after a `--` separator, and the recording runner asserts it. A `roles/<name>` folder that is a symbolic link leaving the crew repository fails.
+  - Red, git safety: a `crew.ref` that starts with `-` fails. A `crew.git` value that starts with `-` fails. A host that starts with `-` fails in both remote forms, `ssh://-o...` and `git@-...:`. The URL goes to `git` after a `--` separator, and the recording runner asserts it. A ref after `--` in `git checkout` would be read as a path, so the resolver first turns the ref into a full commit id with `git rev-parse --verify`, and then checks out that id. The recording runner asserts both steps and their order. A `roles/<name>` folder that is a symbolic link leaving the crew repository fails.
   - Green: a resolver that calls `git` only through the `Runner`.
 - Files: add `src/crew/repo.ts`, `test/crew-repo.test.ts`. Extend `src/env.ts` for the cache path. Change `src/crew/load.ts`.
-- Reworked by group D: the coordinator spec (not yet published) asks that only install can download, so slice D6 moves the clone and the `--update` fetch out of `up`. Build the clone step as its own function that the resolver calls, so D6 can move it to install without a rewrite.
+- Reworked by group D: slice D6 moves the clone and the `--update` fetch out of `up` and into install. Build the clone step as its own function that the resolver calls, so D6 can move it to install without a rewrite.
 - Extra gates: G. Decision 3 in section E is settled, or the slice keeps the `git` path to what the runner does with the user's own credentials.
 - Size: 4 files, about 450 lines. L.
 - Depends on: slices 1, 2.
@@ -98,8 +98,8 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Goal: write a plan file and check it before use.
 - Spec: addendum section 5, steps 1, 2, 3 (hash), 5, and 7.
 - Tests first, `test/crew-plan.test.ts`.
-  - Red: the plan folder has mode 0700 and the file has mode 0600. The id is 32 hex characters from a random source. The plan holds data only: role, lane, name, module path, model, permission mode, and never a command line. The SHA-256 matches the file. Checks fail for a bad id, a path in the id, a symbolic link, a wrong owner, a wrong mode, a wrong hash, and a module that fails the slice 2 checks again. Reading renames the file to `<id>.used` before the first launch. A second read finds nothing and says so.
-  - Red, revalidation: the check reads every field again, because a plan with a matching hash can still hold hostile data. It fails when `permission_mode` is `bypassPermissions` or any value outside the five. It fails when `lanes` is outside 1 to 10. It fails when a name breaks the path-safe name rule. It fails when `model` is empty, starts with `-`, or holds a space or a control character.
+  - Red: the plan folder has mode 0700 and the file has mode 0600. The id is 32 hex characters from a random source. The plan holds data only: the resolved crew repository path, role, lane, name, module path, model, permission mode, and never a command line. The SHA-256 matches the file. Checks fail for a bad id, a path in the id, a symbolic link, a wrong owner, a wrong mode, a wrong hash, and a module that fails the slice 2 checks again. Reading renames the file to `<id>.used` before the first launch. A second read finds nothing and says so.
+  - Red, revalidation: the check reads every field again, because a plan with a matching hash can still hold hostile data. It fails when `permission_mode` is `bypassPermissions` or any value outside the five. It fails when `lanes` is outside 1 to 10. It fails when a name breaks the path-safe name rule. It fails when `model` is empty, starts with `-`, or holds a space or a control character. It fails when a module path does not resolve to a folder inside `<crew repository>/roles/`, for an absolute path elsewhere, a `..` segment, and a symbolic link that leaves the crew repository, even when the hash matches the file.
   - Green: a plan module using `src/fs-private.ts` and `src/fs-atomic.ts`.
 - Files: add `src/crew/plan.ts`, `test/crew-plan.test.ts`. Change nothing else.
 - Extra gates: G. Add tests on the failure order so a failed check never renames the file.
@@ -126,7 +126,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum sections 5 (front command, background command), 6, and 7 (Claude Code).
 - Tests first, `test/crew-claude.test.ts`.
   - Red: `stage` returns the files under `~/.trellis-crew/stage/<session>/`, including a local plugin built from the catalog skills. `foreground` returns `claude --name <name> --append-system-prompt-file <role.md> --plugin-dir <stage plugin> [--model M] "<first prompt>" --add-dir <module folder>`, with the prompt before `--add-dir`. `background` returns the same command plus `--bg --permission-mode <mode>`. `restricted: true` adds `--restricted`. The default mode is `manual`. No command holds `--dangerously-skip-permissions` or `bypassPermissions`. Nothing installs at user scope. Both commands set the working directory to the project root.
-  - Red, path safety: `stage` resolves every path it returns and fails when one is not inside the stage root. A session name or a skill name that breaks the path-safe name rule fails before any file is written.
+  - Red, path safety: `stage` resolves every path it returns and fails when one is not inside the stage root. A session name or a skill name that breaks the path-safe name rule fails before any file is written. The stage root is created with mode 0700. `stage` refuses a stage root that is a symbolic link, and a stage root that another user owns.
   - Green: extend `Adapter` in `src/adapters/types.ts` with optional `stage`, `foreground`, and `background` steps, and implement them in `src/adapters/claude-code.ts`. Every other adapter leaves them unset.
 - Files: change `src/adapters/types.ts`, `src/adapters/claude-code.ts`. Add `src/crew/stage.ts`, `test/crew-claude.test.ts`.
 - Extra gates: G. Checks V1, V2, V3, V4, and V5 must be done first. The existing `test/plugin-claude.test.ts` and `test/start.test.ts` must pass unchanged.
@@ -158,7 +158,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Files: change `src/commands/up.ts`, `src/runner.ts` (a foreground step). Add `test/up.test.ts`. Extend `test/fixtures/bin/claude`.
 - Extra gates: G. Check V6 (process replacement) must be done first.
 - Size: 4 files, about 250 lines. M.
-- Depends on: slice 9.
+- Depends on: slice 9, which group D reworks (D1 and D6). Slice 10 changes with it.
 - Hygiene: the fixture binary prints its arguments and holds no real path.
 
 ### Slice 11. `spawn`: start the background sessions
@@ -167,7 +167,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum section 5, steps 5 to 7, and section 6.
 - Tests first, `test/spawn.test.ts`.
   - Red: `spawn` reads only `<plan folder>/<id>.json` for a valid id. It runs every check from slice 6 first. A failed check starts nothing and names the check. The plan is renamed to `<id>.used` before the first session starts. A second `spawn` starts nothing and says so. Each launch command comes from the adapter's `background` step. Each session is recorded in `team.json`. A launch failure stops the run, keeps the record of the ones that started, and names `trellis-crew down`. A `team.json` that already exists blocks the run (question Q6).
-  - Red, hostile plan: `spawn` rejects a plan whose `permission_mode` is `bypassPermissions` or any value outside the five, even when the hash matches the file. It rejects `lanes` outside 1 to 10, a name that breaks the path-safe name rule, and a bad `model`. Nothing starts in any of these cases.
+  - Red, hostile plan: `spawn` rejects a plan whose `permission_mode` is `bypassPermissions` or any value outside the five, even when the hash matches the file. It rejects `lanes` outside 1 to 10, a name that breaks the path-safe name rule, a bad `model`, and a module path that does not resolve inside `<crew repository>/roles/`. Nothing starts in any of these cases.
   - Red: `USAGE` lists `spawn`.
   - Green: `runSpawn`, sharing the record code in `src/commands/start.ts`.
 - Files: add `src/commands/spawn.ts`, `test/spawn.test.ts`. Change `src/args.ts`, `src/cli.ts`.
@@ -182,6 +182,8 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum section 9.
 - Tests first: `test/store.test.ts`, `test/status.test.ts`, `test/stop.test.ts`, `test/respawn.test.ts`.
   - Red: `team.json` accepts optional `role_module`, `harness`, and `crew_commit`. An older entry without them stays valid and is rewritten unchanged. `status` lists sessions from both paths. `stop` ends sessions from both paths. `respawn <name>` restarts a module session from the recorded module and crew commit, and refuses when the module changed on disk (question Q8). No `sagespec.yml` test changes.
+  - Red, hostile record: a `team.json` file can be edited by hand or by another program, so every value that a command reads from it is checked again. `respawn` fails and starts nothing for a `role_module` that is absolute, has `..`, breaks the path-safe name rule, is a symbolic link that leaves the crew repository, or does not resolve inside `<crew repository>/roles/`. `stop` and `status` skip an entry whose name breaks the path-safe name rule, and print a line that names the entry, and they never pass such a name to a process lookup or a path. A `crew_commit` or `harness` value with a control character is refused.
+  - Red, old entries: an entry from the `sagespec.yml` path has none of the new fields, keeps the name it has today, and goes through the checks that exist today. The new name checks apply to an entry that carries `role_module`, `harness`, or `crew_commit`, and to every name that becomes a path.
   - Green: extend `TeamEntry` and its guard in `src/store/team-json.ts`, then the three commands.
 - Files: change `src/store/team-json.ts`, `src/commands/status.ts`, `src/commands/stop.ts`, `src/commands/respawn.ts`, and the four test files.
 - Extra gates: G. This slice touches existing commands, so run the full existing suite before and after and compare.
@@ -196,7 +198,10 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Tests first, `test/down.test.ts`.
   - Red: `down` reads `team.json` and stops each session with the same code as `stop`. It deletes the stage folder of each session that it stops. It leaves the front session alone. It names any session that has no local process, as `noProcessNote` does today. It is safe to run twice. `USAGE` lists `down`.
   - Red, deletion safety: `down` resolves the real path of each stage folder and deletes it only when that path is inside the stage root. A `team.json` entry named `../../.ssh`, an absolute path, a name with a `/`, and a stage folder that is a symbolic link leaving the stage root each delete nothing, and the run names the entry. A test folder that stands in for the home folder keeps every file.
-  - Green: `runDown`, on top of `src/commands/stop.ts`, with one helper that checks a path against the stage root.
+  - Red, the stage root itself: `down` refuses to delete anything when the stage root is a symbolic link, and names it. It refuses a stage root that another user owns.
+  - Red, the gap between check and delete: right before each removal, `down` runs `lstat` on the path and refuses any symbolic link. A test replaces a checked stage folder with a symbolic link to a folder that stands in for the home folder, after the check and before the removal, using a hook in the helper. Nothing outside the stage root is deleted, and the run names the entry.
+  - Red, no links followed: the removal never follows a symbolic link. A stage folder that holds a link to an outside folder loses the link and keeps every file in the target.
+  - Green: `runDown`, on top of `src/commands/stop.ts`, with one helper that checks a path against the stage root, runs `lstat` before each removal, and removes without following links.
 - Files: add `src/commands/down.ts`, `test/down.test.ts`. Change `src/args.ts`, `src/cli.ts`.
 - Extra gates: G. Check V7 (how to stop a Claude Code background session) must be done first.
 - Size: 4 files, about 260 lines. M.
@@ -228,6 +233,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Extra gates: G, plus the sanitizer on all tracked files (`npm run sanitize`).
 - Size: 2 files, about 120 lines. S.
 - Depends on: slice 14.
+- Reworked by group D: the README text about `up` covers the clone and the `--update` fetch that slice D6 moves to install, and the root rule that slice D1 changes. Slice D6 and slice D1 update the README and its test.
 - Hygiene: examples use `example-crew` and relative paths.
 
 ### Later slices, off until the routing design exists
@@ -252,31 +258,28 @@ The addendum says these adapters stay off until a routing design is published in
 
 ## C. Not in crew
 
-These topics belong to the coordinator, not to crew. They stay out of crew's build. The coordinator spec is not yet published, so each one is marked "pending the coordinator spec".
+These jobs are not crew's. They stay out of crew's build. The coordinator spec is not yet published, so each one is marked "pending the coordinator spec".
 
 - Finding a config file above the folder of `crew.yml`. Crew never searches upward. Pending the coordinator spec.
 - Starting more than one part, and the order of parts. Pending the coordinator spec.
 - Starting or ordering other parts from crew. Crew holds no text that does this. Pending the coordinator spec.
-- The coordinator's own config file and its commands. Crew never reads the coordinator's config and never reads coordinator variables to decide what to do. Pending the coordinator spec.
-- The coordinator's records of what it started and what the user approved. Pending the coordinator spec.
-- The marketplace file and the coordinator's own plugin. Pending the coordinator spec.
 
-Crew does own the `export-skills` operation, and slice D5 builds it. It is gated on the coordinator spec.
+Crew never reads any file or variable that belongs to the coordinator to decide what to do. Crew does own the `export-skills` operation, and slice D5 builds it, gated on the coordinator spec.
 
 ## D. Changes that wait on the coordinator spec
 
-This group is gated on the coordinator spec, which is not yet published. It must not start until that spec settles. If the spec changes, this group changes with it. Each item below names the merged crew behavior that it changes. Test details that depend on the spec's exact formats are fixed when the spec is published. The tests below state crew's own rules.
+This group is gated on the coordinator spec, which is not yet published. It must not start until that spec settles. If the spec changes, this group changes with it. Each item below names the merged crew behavior that it changes. The tests below state crew's own rules. Test details that depend on formats the spec will fix are left open until the spec is published.
 
-The coordinator spec asks crew for four changes:
+Group D changes crew in four ways:
 
-1. No download in `up`. Only install can download, so the `crew.git` clone moves from `up` into install (slice D6).
+1. No download in `up`. The `crew.git` clone moves from `up` into install (slice D6).
 2. The project root is the folder of `crew.yml` (slice D1).
-3. A part manifest file, with `version --json` and `health --json` commands (slices D2, D3, and D4).
+3. A machine-readable description of crew, with `version --json` and `health --json` commands (slices D2, D3, and D4).
 4. An `export-skills` operation that writes to the folder it is given and refuses a harness that differs from `crew.yml` (slice D5).
 
-Slice D7 then edits the merged crew addendum to match, and adds two rules that the merged addendum lacks. Slices D1, D3, D4, D5, and D6 can merge in any order after the gate opens. Slice D2 needs D3, D4, and D5 for its manifest to be true. Slice D7 comes last.
+Slice D7 then edits the merged crew addendum to match, and adds rules that the merged addendum lacks. Slices D1, D3, D4, D5, and D6 can merge in any order after the gate opens. Slice D2 needs D3, D4, and D5. Slice D7 comes last.
 
-Slices 3, 5, and 9 build behavior that group D reverses: slice 3 and slice 9 use the root that D1 changes, and slices 5 and 9 use the clone and `--update` fetch that D6 removes from `up`. Either settle D1 and D6 first, or build slices 3, 5, and 9 as written and rework them in group D.
+Slices 3, 5, 9, 10, and 15 build behavior that group D reverses or depends on. Slices 3 and 9 use the root that D1 changes. Slices 5 and 9 use the clone and the `--update` fetch that D6 removes from `up`. Slice 10 depends on slice 9. Slice 15 describes `up` in the README. Either settle D1 and D6 first, or build these slices as written and rework them in group D.
 
 ### Slice D1. The project root is the folder of `crew.yml`
 
@@ -288,13 +291,13 @@ Slices 3, 5, and 9 build behavior that group D reverses: slice 3 and slice 9 use
 - Gates: G, and all `up`, `spawn`, and `down` tests re-run.
 - Hygiene: fixtures use temporary folders.
 
-### Slice D2. A part manifest file in the crew repository
+### Slice D2. A machine-readable description of crew
 
 - Changes: nothing at run time. It adds a file and a `files` entry in `package.json`.
-- Tests first, `test/part-manifest.test.ts`.
-  - Red: the file parses and holds the fields that the coordinator spec requires, fixed when it is published. It lists that install can change user-scope harness settings. Every command in it is an array of strings and never one shell string. The command that starts crew runs `up` with the config path. The file is included in the package.
+- Tests first, `test/crew-description.test.ts`.
+  - Red: the file parses. It names the commands that crew runs, and it says that install can change user-scope harness settings. The command that starts crew runs `up` with the config path. The file is included in the package. Its exact fields are fixed when the coordinator spec is published.
   - Green: add the file and the `files` entry.
-- Files: add the manifest file, `test/part-manifest.test.ts`. Change `package.json`. About 90 lines. S.
+- Files: add the description file, `test/crew-description.test.ts`. Change `package.json`. About 90 lines. S.
 - Gates: G, and `npm pack --dry-run` lists the file.
 - Depends on: D3, D4, and D5, and question Q9.
 - Hygiene: no private name in the file.
@@ -303,7 +306,7 @@ Slices 3, 5, and 9 build behavior that group D reverses: slice 3 and slice 9 use
 
 - Changes: `src/args.ts` today knows only `--version` and `-v`, and prints the version alone. A new `version` command with `--json` adds output. The plain output stays as it is.
 - Tests first, `test/version-json.test.ts`.
-  - Red: `version --json` prints one JSON object that holds the crew version, and the other fields the coordinator spec requires, fixed when it is published. It writes nothing to disk, opens no listener, and uses no network. Exit code 0. Plain `--version` output does not change. `USAGE` lists the command.
+  - Red: `version --json` prints one JSON object that holds the crew version, and its other fields are fixed when the coordinator spec is published. It writes nothing to disk, opens no listener, and uses no network. Exit code 0. Plain `--version` output does not change. `USAGE` lists the command.
   - Green: a new command in `src/args.ts` and `src/cli.ts`.
 - Files: change `src/args.ts`, `src/cli.ts`. Add `test/version-json.test.ts`. About 100 lines. S.
 - Gates: G.
@@ -353,8 +356,12 @@ Slices 3, 5, and 9 build behavior that group D reverses: slice 3 and slice 9 use
 - Tests first: a docs check in `test/docs.test.ts` that reads `docs/crew-addendum.md` and asserts these lines.
   - It has no text that says `up` clones or fetches.
   - It defines the project root as the folder of `crew.yml`.
-  - It names the part manifest, `version --json`, `health --json`, and `export-skills`.
-  - Its field table says that `roles[].name` and each skill `name` accept only `a` to `z`, `0` to `9`, and `-`. The merged addendum has this gap.
+  - It names the crew description file, `version --json`, `health --json`, and `export-skills`.
+  - Its field table says that `roles[].name` and each skill `name` accept only `a` to `z`, `0` to `9`, and `-`, start with a letter or a digit, and stay under a length cap. The merged addendum has this gap.
+  - Its section on `respawn`, `stop`, and `status` says that every value read from `team.json` is checked again.
+  - Its section on the start plan says that each module path resolves inside `<crew repository>/roles/`.
+  - Its section on the stage folder says that `down` refuses a stage root that is a symbolic link and runs `lstat` before each removal.
+  - Its section on the crew repository says that a ref is turned into a commit id with `git rev-parse --verify` before checkout.
   - Its section on the stage folder says that `down` deletes only a resolved path inside the stage root. The merged addendum has this gap too.
   - It says that `up` starts the front session on the same terminal and exits with its code, in place of "replaces its own process".
 - Files: change `docs/crew-addendum.md`. Add `test/docs.test.ts`. About 140 lines. S.
@@ -364,7 +371,9 @@ Slices 3, 5, and 9 build behavior that group D reverses: slice 3 and slice 9 use
 
 ## E. Decisions and questions
 
-The plan settles none of these. Each item has lettered options, a default, the result of each letter, and an owner. The default applies only when the owner does not answer. Reply with the item number and a letter.
+The plan settles none of these. Each item has an owner, lettered options, a default, and the result of each letter. Reply with the item number and a letter.
+
+A default applies only when the owner does not answer, and only for an item that has one. Three items touch security or consent: decision 2a, decision 3, and question Q1. They have no default on silence. They wait for their owner. Each shows a suggested letter, which never applies on its own.
 
 ### Decisions
 
@@ -372,14 +381,14 @@ The plan settles none of these. Each item has lettered options, a default, the r
    - A. `trellis-crew up`. Default. Result: no new `bin` entry.
    - B. A separate `crew` binary. Result: a new `bin` entry, and renames in slices 9, 11, 13, and 15 and in the front prompt text of slice 7.
 2. **Cursor and the project folder** (addendum section 11, item 2). This is two decisions.
-   - 2a. Ruling: may the Cursor adapter write rule files inside the project? Owner: the Tech Lead. Settle before slice L2.
-     - A. Yes, with a git exclude line and removal by `down`. Default. Result: slice L2 can exist.
+   - 2a. Ruling: may the Cursor adapter write rule files inside the project? Owner: the Tech Lead. Settle before slice L2. No default: it waits for the owner. Suggested letter: A.
+     - A. Yes, with a git exclude line and removal by `down`. Result: slice L2 can exist, and its tests cover the exclude line and the removal.
      - B. No. Result: Cursor stays off until Cursor documents a rules path outside the workspace, and slice L2 waits.
    - 2b. Product: does version 1 support Cursor at all? Owner: the maintainer. Settle before slice L2.
      - A. No. Default. Result: slice L2 is dropped from version 1.
      - B. Yes, after the routing design exists. Result: slice L2 stays in the plan, gated by 2a.
-3. **Private remotes for `crew.git`** (addendum section 11, item 3). Owner: the Tech Lead. Settle before slice 5.
-   - A. Allow a private remote, with the user's own git credentials. Default. Result: slice 5 tests only the URL forms and the safety rules.
+3. **Private remotes for `crew.git`** (addendum section 11, item 3). Owner: the Tech Lead. Settle before slice 5. No default: it waits for the owner. Suggested letter: A.
+   - A. Allow a private remote, with the user's own git credentials. Result: slice 5 tests only the URL forms and the safety rules.
    - B. Allow a public remote only. Result: slice 5 adds a check that refuses a remote that asks for credentials.
 4. **The memory size cap** (addendum section 11, item 4). Owner: the Tech Lead. Settle before slice 2.
    - A. Keep 256 KiB. Default. Result: no change to slice 2.
@@ -391,36 +400,50 @@ The plan settles none of these. Each item has lettered options, a default, the r
    - A. Publish it in this repository. Default. Result: slices L1 and L2 can start after it lands.
    - B. Keep Codex and Cursor off for all of version 1. Result: slices L1 and L2 leave the plan.
 7. **Package version.** Owner: the Tech Lead. Settle before the release.
-   - A. A minor version, because `up`, `spawn`, and `down` are additive. Default.
-   - B. A major version. Result: release notes name the change as breaking.
+   - A. A minor version, because `up`, `spawn`, and `down` are additive. Default. Result: the release notes list the new commands as additions.
+   - B. A major version. Result: the release notes name the change as breaking, and the package version jumps.
 
 ### Questions where the spec is unclear
 
-- Q1. Does `up` show the `crew.yml` and ask before it starts? The addendum lists no `--yes` flag. Owner: the maintainer. Settle before slice 10.
-  - A. No prompt. Default. B. The same prompt that `start` shows for a found `sagespec.yml`, with `--yes`.
+- Q1. Does `up` show the `crew.yml` and ask before it starts sessions? The addendum lists no `--yes` flag. Owner: the maintainer, because it is a consent call. It has a security side too, because `up` can start up to ten sessions per role, each with its permission mode. Settle before slice 10. Default: B, which never applies on silence. It waits for the maintainer.
+  - A. No prompt. Result: `up` starts at once, and slice 10 has no prompt test.
+  - B. The same prompt that `start` shows for a found `sagespec.yml`, with `--yes` to skip it. Result: slice 10 adds the prompt, the `--yes` flag, and a test that no prompt with no terminal and no `--yes` starts nothing.
 - Q2. `up --update` with `crew.path`. Owner: the Tech Lead. Settle before slice 5. Question Q12 replaces it once D6 lands.
-  - A. Ignore the flag. Default. B. Fail with an error.
+  - A. Ignore the flag. Default. Result: slice 5 tests that the flag changes nothing.
+  - B. Fail with an error. Result: slice 5 tests an exit code 2 and a message.
 - Q3. Node cannot replace its own process. Owner: the Tech Lead. Settle before slice 10.
   - A. Start the child on the same terminal and exit with its code. Default. Result: slice D7 corrects the addendum text.
   - B. Use a small launcher that replaces the process. Result: a new file and a new gate.
 - Q4. Where do the three new `team.json` fields sit? Owner: the Tech Lead. Settle before slice 12.
-  - A. On each session entry. Default. B. On the record.
+  - A. On each session entry. Default. Result: the entry guard grows, and each old entry stays valid without them.
+  - B. On the record. Result: one set of fields for the whole team, and the tests read the record.
 - Q5. Where does the kickoff of a `builtin` entry live, since the plan holds no command? Owner: the Tech Lead. Settle before slice 14.
-  - A. In the plan, as data. Default. B. `spawn` reads it again from `crew.yml`, and the plan holds the file hash.
+  - A. In the plan, as data. Default. Result: the plan check reads and bounds the kickoff text.
+  - B. `spawn` reads it again from `crew.yml`, and the plan holds the file hash. Result: `spawn` needs the file path and a hash check.
 - Q6. `launchTeam` refuses when a `team.json` exists. What does `spawn` do? Owner: the Tech Lead. Settle before slice 11.
-  - A. Refuse too. Default. B. Add to the existing record.
+  - A. Refuse too. Default. Result: `spawn` needs a clean team record, and a test covers the refusal.
+  - B. Add to the existing record. Result: `spawn` merges entries, and a test covers a name clash.
 - Q7. Does the front session go into `team.json`? Owner: the Tech Lead. Settle before slice 12.
-  - A. No. Default. Result: `status`, `stop`, and `down` stay background only. B. Yes. Result: they must skip the front session by rule.
+  - A. No. Default. Result: `status`, `stop`, and `down` stay background only.
+  - B. Yes. Result: `status`, `stop`, and `down` must skip the front session by rule.
 - Q8. What does `respawn` do for a module session when the crew commit changed? Owner: the Tech Lead. Settle before slice 12.
-  - A. Refuse and name the change. Default. B. Restart from the current commit.
-- Q9. Which checks does `health --json` run, and what does the coordinator's configure step mean for crew, which has none today? Owner: the Tech Lead. Settle before D2 and D4.
-  - A. Health reads the probe, `install.yml`, and `team.json`. The configure step changes nothing and says so. Default. B. A new configure command.
+  - A. Refuse and name the change. Default. Result: `respawn` needs the recorded commit and a test for the refusal.
+  - B. Restart from the current commit. Result: `respawn` runs the module checks again on the new commit and updates the record.
+- Q9. Which checks does `health --json` run, and does crew need a setup step apart from install? Owner: the Tech Lead. Settle before D2 and D4.
+  - A. Health reads the probe, `install.yml`, and `team.json`. Crew has no setup step apart from install. Default. Result: slice D4 reuses the readers that exist.
+  - B. A new setup command. Result: a new slice adds it before D2.
 - Q10. Does `require` allow a path with `..` or a symbolic link out of the root? Owner: the Tech Lead. Settle before slice 3.
-  - A. Reject both. Default. B. Allow a symbolic link that stays inside the root.
+  - A. Reject both. Default. Result: slice 3 tests both failures.
+  - B. Allow a symbolic link that stays inside the root. Result: slice 3 tests that a link inside passes and a link outside fails.
 - Q11. The install step must download the crew repository (slice D6). Does it reuse `trellis-crew install` and add the clone, or is it a new operation? Owner: the Tech Lead. Settle before D6.
-  - A. Reuse `trellis-crew install` and add the clone. Default. B. A new operation.
+  - A. Reuse `trellis-crew install` and add the clone. Default. Result: D6 changes `src/commands/install.ts` and keeps its tests.
+  - B. A new operation. Result: D6 adds a command and its `USAGE` assertion, and the old install stays as it is.
 - Q12. What does `up --update` do after D6 moves the fetch? Owner: the Tech Lead. Settle before D6.
-  - A. Exit with code 2 and name install. Default. B. Accept the flag, do nothing, and print a warning.
+  - A. Exit with code 2 and name install. Default. Result: D6 tests the exit code and the message.
+  - B. Accept the flag, do nothing, and print a warning. Result: D6 tests the warning, and the flag stays in `USAGE`.
+- Q13. What is the length cap for a base name and for a final session name, lane suffix included? A long name can pass the file name limit of the system. Owner: the Tech Lead. Settle before slice 1.
+  - A. 40 characters for a base name and 64 for a final name. Default. Result: slices 1, 2, and 4 test both edges.
+  - B. Another pair of numbers. Result: slices 1, 2, and 4 use the new numbers.
 
 ## F. Risks and checks before a build
 
@@ -441,11 +464,12 @@ The addendum's "Checks before a build" and "Gaps" become these named checks. Eac
 
 Risks:
 
-- **Risk:** a name in `crew.yml` or in a skill catalog becomes a path, and `down` deletes a stage folder. Mitigation: the path-safe name rule in slices 1, 2, 4, 6, 8, and 11, a resolved-path check in slices 8 and 13, and the same rule in the addendum through slice D7.
+- **Risk:** a name in `crew.yml`, in a skill catalog, or in `team.json` becomes a path, and `down` deletes a stage folder. The stage root can also be a symbolic link, and a folder can change between the check and the removal. Mitigation: the path-safe name rule in slices 1, 2, 4, 6, 8, 11, and 12, a resolved-path check in slices 8 and 13, a refusal of a stage root that is a link, `lstat` right before each removal, removal without following links, and the same rules in the addendum through slice D7.
+- **Risk:** a module path in the plan or in `team.json` points outside the crew repository. Mitigation: slices 6, 11, and 12 require that it resolves inside `<crew repository>/roles/`, even when the hash matches.
 - **Risk:** a crew repository can hold hostile text. Mitigation: no code runs from it, the plan holds data only, `spawn` checks the hash and every field again, and the README states the trust rule (slice 15).
 - **Risk:** the plan file or its environment variables get forged. Mitigation: the checks in slice 6, and tests for each failure.
 - **Risk:** slice 12 breaks `sagespec.yml` users. Mitigation: the existing tests must pass unchanged, and older entries stay valid.
-- **Risk:** the coordinator spec changes after slices merge. Mitigation: group D stays gated. Slices 3, 5, and 9 depend on it, because group D reverses them, and slices 1, 2, 4, 6, 7, 8, 10 to 15 do not.
+- **Risk:** the coordinator spec changes after slices merge. Mitigation: group D stays gated. Slices 3, 5, 9, 10, and 15 depend on it, because group D reverses them or they build on a reversed slice, and slices 1, 2, 4, 6, 7, 8, 11, 12, 13, and 14 do not.
 - **Risk:** vendor flags change. Mitigation: each flag sits in one adapter file with the retrieval date in a comment, as `claude-code.ts` does today.
 
 ## G. Public-hygiene rules
@@ -468,9 +492,9 @@ The repository is PUBLIC. These rules apply to every file, every commit message,
 
 ## Success criteria
 
-- [ ] The maintainer approves this plan, and the owners settle decisions 1 to 7 and questions Q1 to Q12 as their slices come up.
+- [ ] The maintainer approves this plan, and the owners settle decisions 1 to 7 and questions Q1 to Q13 as their slices come up. Decision 2a, decision 3, and question Q1 wait for their owners and never take a default.
 - [ ] Slices 1 to 15 merge in order with all gates green, and every existing command test passes unchanged.
 - [ ] `trellis-crew up`, `spawn`, and `down` run end to end on Claude Code against a fixture crew.
-- [ ] No `crew.yml` name, skill name, or `team.json` entry can make `down` or `export-skills` touch a path outside its root.
+- [ ] No `crew.yml` name, skill name, plan value, or `team.json` entry can make `down`, `respawn`, or `export-skills` touch a path outside its root, and a stage root that is a symbolic link stops `down`.
 - [ ] Slices L1 and L2 stay off until the routing design exists.
 - [ ] Group D starts only after the coordinator spec settles.
