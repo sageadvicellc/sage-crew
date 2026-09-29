@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadCrewYml, parseCrewYml } from '../src/crew/load.ts';
-import type { CrewError } from '../src/crew/schema.ts';
+import { MAX_FILE_BYTES, type CrewError } from '../src/crew/schema.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import {
   CREW_FILE,
@@ -13,6 +13,7 @@ import {
   GIT_SCP,
   GIT_SSH,
   lineContaining,
+  paddedToBytes,
   quoted,
 } from './helpers/crew.ts';
 
@@ -179,7 +180,7 @@ describe('crew.yml: crew.path and crew.git', () => {
 
   it('crew.git rejects a URL with a space or a control character', () => {
     for (const url of [`${GIT_HTTPS} x`, `${GIT_HTTPS}\u0007`]) {
-      expectError(crewYml({ crew: [`git: ${quoted(url)}`] }), 'crew.git', /https:\/\/|ssh:\/\/|git@/);
+      expectError(crewYml({ crew: [`git: ${quoted(url)}`] }), 'crew.git', /https:\/\/|ssh:\/\/|git@|control character/);
     }
   });
 
@@ -465,7 +466,201 @@ describe('loadCrewYml', () => {
     if (!result.ok) {
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toMatchObject({ file, line: 1, field: '(file)' });
-      expect(result.errors[0]?.reason).toMatch(/cannot read/);
+      expect(result.errors[0]?.reason).toMatch(/does not exist/);
+    }
+  });
+});
+
+describe('crew.yml: text fields hold no control character', () => {
+  const ESC = '\u001b';
+  const NUL = '\u0000';
+  // label, a valid base value, builds a file around a value, the field the error names
+  const FIELDS: Array<[string, string, (value: string) => string, string]> = [
+    ['crew.path', 'a', (v) => crewYml({ crew: [`path: ${quoted(v)}`] }), 'crew.path'],
+    ['crew.ref', 'a', (v) => crewYml({ crew: ['path: ../example-crew', `ref: ${quoted(v)}`] }), 'crew.ref'],
+    ['crew.git', GIT_HTTPS, (v) => crewYml({ crew: [`git: ${quoted(v)}`] }), 'crew.git'],
+    ['require item', 'a', (v) => crewYml({ require: [quoted(v)] }), 'require[0]'],
+    ['front', 'lead', (v) => crewYml({ front: quoted(v) }), 'front'],
+    ['model', 'a', (v) => crewWithRole('role: lead', `model: ${quoted(v)}`), 'roles[0].model'],
+    ['name', 'a', (v) => crewWithRole('role: lead', `name: ${quoted(v)}`), 'roles[0].name'],
+    ['role', 'a', (v) => crewYml({ roles: [[`role: ${quoted(v)}`]], front: quoted(v) }), 'roles[0].role'],
+    [
+      'kickoff',
+      'Go.',
+      (v) => crewYml({ roles: [['builtin: lead', `kickoff: ${quoted(v)}`]], front: 'lead' }),
+      'roles[0].kickoff',
+    ],
+  ];
+  const CASES = FIELDS.flatMap(([label, base, build, field]) =>
+    [ESC, NUL].map((c) => [label, base, c, build, field] as const),
+  );
+
+  it.each(CASES)('%s rejects a control character (%#)', (_label, base, control, build, field) => {
+    expectError(build(`${base}${control}`), field, /./);
+  });
+
+  it('single-line fields reject a newline and a tab', () => {
+    expectError(crewYml({ crew: [`path: ${quoted('a\nb')}`] }), 'crew.path', /control character/);
+    expectError(crewYml({ crew: ['path: ../example-crew', `ref: ${quoted('a\tb')}`] }), 'crew.ref', /control character/);
+    expectError(crewWithRole('role: lead', `model: ${quoted('a\nb')}`), 'roles[0].model', /control character/);
+    expectError(crewYml({ require: [quoted('a\nb')] }), 'require[0]', /control character/);
+  });
+
+  it('kickoff keeps a newline and a tab', () => {
+    const text = crewYml({ roles: [['builtin: lead', `kickoff: ${quoted('Go.\n\tThen wait.')}`]], front: 'lead' });
+    const result = parseCrewYml(text, CREW_FILE);
+    expect(result.ok && result.config.roles[0]?.kickoff).toBe('Go.\n\tThen wait.');
+  });
+
+  it.each(['-x', '--upload-pack=x', '-'])('crew.ref and model reject %j: a leading hyphen', (value) => {
+    expectError(crewYml({ crew: ['path: ../example-crew', `ref: ${quoted(value)}`] }), 'crew.ref', /must not start with/);
+    expectError(crewWithRole('role: lead', `model: ${quoted(value)}`), 'roles[0].model', /must not start with/);
+  });
+
+  it.each(['a-b', 'v1-2'])('crew.ref and model accept %j', (value) => {
+    expectValid(crewYml({ crew: ['path: ../example-crew', `ref: ${quoted(value)}`] }));
+    expectValid(crewWithRole('role: lead', `model: ${quoted(value)}`));
+  });
+});
+
+describe('crew.yml: names that are not text or end in a newline', () => {
+  it('role: 123 is a number and fails as "must be text"', () => {
+    expectError(crewYml({ roles: [['role: 123']], front: 'lead' }), 'roles[0].role', /must be text/);
+  });
+
+  it('a name of "lead\\n" fails, for name and for role', () => {
+    expectError(crewWithRole('role: lead', `name: ${quoted('lead\n')}`), 'roles[0].name', /a-z, 0-9/);
+    const text = crewYml({ roles: [[`role: ${quoted('lead\n')}`]], front: quoted('lead\n') });
+    expectError(text, 'roles[0].role', /a-z, 0-9/);
+  });
+});
+
+describe('crew.yml: tags, warnings, and aliases', () => {
+  it.each(['!foo lead', '!!js/function lead', '!!binary lead', '!!set {}'])('the tag in "role: %s" fails', (value) => {
+    const text = crewWithRole(`role: ${value}`);
+    const errors = errorsOf(text);
+    expect(errors.some((e) => /tag/i.test(e.reason) && e.line === lineContaining(text, 'role:')), JSON.stringify(errors)).toBe(true);
+  });
+
+  it('a YAML core tag on a value still passes', () => {
+    expectValid(crewYml({ roles: [['role: !!str lead'], ['role: worker', 'lanes: !!int 2']], front: 'lead' }));
+  });
+
+  it('a plain file passes with no warning', () => {
+    expectValid(crewYml());
+  });
+
+  it('an alias in a role name fails and is not expanded', () => {
+    const text = crewYml({ roles: [['role: &r lead'], ['role: *r']], front: 'lead' });
+    const errors = errorsOf(text);
+    expect(errors.some((e) => /alias/i.test(e.reason) && e.line === lineContaining(text, '*r')), JSON.stringify(errors)).toBe(true);
+  });
+
+  it('an alias as a whole role entry fails', () => {
+    const text = 'version: 1\nharness: claude-code\ncrew:\n  path: ../example-crew\nfront: lead\nroles:\n  - &entry\n    role: lead\n  - *entry\n';
+    const errors = errorsOf(text);
+    expect(errors.some((e) => /alias/i.test(e.reason) && e.line === 9), JSON.stringify(errors)).toBe(true);
+    expect(errors.some((e) => e.field === 'roles[1]')).toBe(true);
+  });
+
+  it('a << merge key is an unknown field, and its alias fails', () => {
+    const text = crewYml({ roles: [['role: lead', '<<: *base']], front: 'lead', extra: ['base: &base', '  lanes: 2'] });
+    expectError(text, 'roles[0].<<', /unknown field/);
+    expect(errorsOf(text).some((e) => /alias/i.test(e.reason))).toBe(true);
+  });
+
+  it('an anchor on its own changes nothing', () => {
+    const plain = parseCrewYml(crewYml(), CREW_FILE);
+    const anchored = parseCrewYml(crewYml({ roles: [['role: &r lead'], ['role: worker', 'lanes: 3'], ['role: reviewer']] }), CREW_FILE);
+    expect(anchored).toEqual(plain);
+    expect(plain.ok).toBe(true);
+  });
+});
+
+describe('crew.yml: several problems at once', () => {
+  it('lists every independent error and drops none', () => {
+    const text = crewYml({
+      roles: [
+        ['role: 123'],
+        ['role: a', 'builtin: lead', 'kickoff: Go.'],
+        ['role: worker', 'permission_mode: yolo'],
+        ['role: reviewer', 'lanes: 0'],
+      ],
+      front: 'lead',
+      extra: ['colour: blue'],
+    });
+    const result = parseCrewYml(text, CREW_FILE);
+    expect(result.ok).toBe(false);
+    const fields = (result.ok ? [] : result.errors.map((e) => e.field)).sort();
+    expect(fields).toEqual(
+      ['colour', 'roles[0].role', 'roles[1]', 'roles[2].permission_mode', 'roles[3].lanes'].sort(),
+    );
+  });
+
+  it('does not add "names no entry" when a role entry was rejected', () => {
+    const errors = errorsOf(crewYml({ roles: [['role: 123']], front: 'lead' }));
+    expect(errors.map((e) => e.field)).toEqual(['roles[0].role']);
+  });
+
+  it('still reports an ambiguous front and a front with lanes above 1 next to other errors', () => {
+    const ambiguous = crewYml({ roles: [['role: lead'], ['role: lead', 'name: other'], ['role: 123']], front: 'lead' });
+    expectError(ambiguous, 'front', /ambiguous/);
+    const lanes = crewYml({ roles: [['role: lead', 'lanes: 2'], ['role: 123']], front: 'lead' });
+    expectError(lanes, 'front', /lanes/);
+  });
+});
+
+describe('crew.yml: error wording', () => {
+  it('escapes a newline in an unknown key, so the field is one line', () => {
+    const errors = errorsOf(crewYml({ extra: [`${quoted('bad\nkey')}: 1`] }));
+    const error = errors.find((e) => e.field.startsWith('bad'));
+    expect(error?.field).toBe('bad\\nkey');
+    expect(error?.reason).not.toMatch(/\n/);
+  });
+
+  it('a file with two YAML documents gets one plain reason', () => {
+    const errors = errorsOf(`${crewYml()}---\nversion: 1\n`);
+    expect(errors.some((e) => e.field === '(file)' && e.reason === 'the file must hold one YAML document')).toBe(true);
+  });
+});
+
+describe('loadCrewYml: the file itself', () => {
+  function tempFile(name: string, content: string): string {
+    const file = join(mkdtempSync(join(makeFixtureHome(), 'crew-')), name);
+    writeFileSync(file, content);
+    return file;
+  }
+
+  it('passes a file of exactly the size cap', () => {
+    const result = loadCrewYml(tempFile('crew.yml', paddedToBytes(crewYml(), MAX_FILE_BYTES)));
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+  });
+
+  it('refuses a file one byte over the cap, and says so', () => {
+    const file = tempFile('crew.yml', paddedToBytes(crewYml(), MAX_FILE_BYTES + 1));
+    const result = loadCrewYml(file);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatchObject({ file, line: 1, field: '(file)' });
+      expect(result.errors[0]?.reason).toMatch(/larger than/);
+    }
+  });
+
+  it('refuses a directory as "not a regular file"', () => {
+    const dir = mkdtempSync(join(makeFixtureHome(), 'crew-'));
+    const result = loadCrewYml(dir);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0]?.reason).toMatch(/not a regular file/);
+  });
+
+  it('gives a human reason for a missing file, not a bare code', () => {
+    const dir = mkdtempSync(join(makeFixtureHome(), 'crew-'));
+    const result = loadCrewYml(join(dir, 'missing.yml'));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors[0]?.reason).toMatch(/does not exist/);
+      expect(result.errors[0]?.reason).not.toBe('ENOENT');
     }
   });
 });

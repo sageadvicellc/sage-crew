@@ -24,6 +24,20 @@ export const LANES_MIN = 1;
 export const LANES_MAX = 10;
 export const DEFAULT_LANES = 1;
 
+/** The largest `crew.yml` the loader reads: 256 KiB. */
+export const MAX_FILE_BYTES = 256 * 1024;
+
+/** The YAML core schema tags. Any other explicit tag fails the file. */
+export const CORE_YAML_TAGS: readonly string[] = [
+  'map',
+  'seq',
+  'str',
+  'int',
+  'float',
+  'bool',
+  'null',
+].map((name) => `tag:yaml.org,2002:${name}`);
+
 /** The length cap for a base name (question Q13, default A). */
 export const NAME_MAX_LENGTH = 40;
 

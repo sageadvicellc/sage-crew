@@ -1,9 +1,24 @@
-import { readFileSync } from 'node:fs';
-import { isMap, isNode, isScalar, isSeq, LineCounter, parseDocument, type Node, type Pair, type YAMLMap } from 'yaml';
-import { printable } from '../printable.ts';
+import { readFileSync, statSync } from 'node:fs';
+import {
+  isAlias,
+  isCollection,
+  isMap,
+  isNode,
+  isPair,
+  isScalar,
+  isSeq,
+  LineCounter,
+  parseDocument,
+  visit,
+  type Document,
+  type Pair,
+  type YAMLMap,
+} from 'yaml';
+import { hasControlCharacter, printable } from '../printable.ts';
 import {
   BUILT_HARNESSES,
   BUILTIN_ROLES,
+  CORE_YAML_TAGS,
   CREW_HARNESSES,
   CREW_SCHEMA_VERSION,
   DEFAULT_LANES,
@@ -11,6 +26,7 @@ import {
   isAcceptedGitUrl,
   LANES_MAX,
   LANES_MIN,
+  MAX_FILE_BYTES,
   pathSafeNameProblem,
   PERMISSION_MODES,
   REFUSED_PERMISSION_MODE,
@@ -28,8 +44,6 @@ const TOP_KEYS = new Set(['version', 'harness', 'crew', 'require', 'front', 'rol
 const CREW_KEYS = new Set(['path', 'git', 'ref']);
 const ROLE_KEYS = new Set(['role', 'builtin', 'kickoff', 'name', 'model', 'permission_mode', 'restricted', 'lanes']);
 
-type AnyNode = Node | Pair | null | undefined;
-
 /** Collects errors for one file, with the line of the node each one points at. */
 class Checker {
   readonly errors: CrewError[] = [];
@@ -42,13 +56,18 @@ class Checker {
   }
 
   /** The 1-based line a node starts on. A pair points at its key. Unknown position: line 1. */
-  line(node: AnyNode): number {
-    const target: unknown = node && 'key' in node ? node.key : node;
+  line(node: unknown): number {
+    const target = isPair(node) ? node.key : node;
     const start = isNode(target) ? target.range?.[0] : undefined;
-    return start === undefined ? 1 : this.counter.linePos(start).line;
+    return this.lineAt(start);
   }
 
-  fail(node: AnyNode, field: string, reason: string): void {
+  /** The line of a character offset. Unknown offset: line 1. */
+  lineAt(offset: number | undefined): number {
+    return offset === undefined ? 1 : this.counter.linePos(offset).line;
+  }
+
+  fail(node: unknown, field: string, reason: string): void {
     this.errors.push({ file: this.file, line: this.line(node), field, reason });
   }
 }
@@ -58,7 +77,7 @@ function pairOf(map: YAMLMap, key: string): Pair | undefined {
 }
 
 /** The node a value sits on, so an error points at the value and not the key. */
-function valueNode(pair: Pair): AnyNode {
+function valueNode(pair: Pair): unknown {
   return isScalar(pair.value) || isMap(pair.value) || isSeq(pair.value) ? pair.value : pair;
 }
 
@@ -75,7 +94,8 @@ function checkUnknownKeys(c: Checker, map: YAMLMap, allowed: Set<string>, prefix
   for (const pair of map.items) {
     const key = isScalar(pair.key) ? String(pair.key.value) : undefined;
     if (key !== undefined && allowed.has(key)) continue;
-    const name = printable(key ?? '?');
+    // JSON-escaped, so a newline or tab in a key cannot break the line.
+    const name = JSON.stringify(printable(key ?? '?')).slice(1, -1);
     c.fail(pair, `${prefix}${name}`, `unknown field "${name}"`);
   }
 }
@@ -87,12 +107,35 @@ function requiredPair(c: Checker, map: YAMLMap, key: string, field: string): Pai
   return pair;
 }
 
+interface TextOptions {
+  /** Allow a newline and a tab, as a prompt does. Other control characters still fail. */
+  multiline?: boolean;
+  /** Refuse a leading `-`, which a command could read as an option. */
+  noLeadingHyphen?: boolean;
+}
+
 /** A non-empty string value, or undefined after reporting why the value is not one. */
-function nonEmptyText(c: Checker, pair: Pair, field: string, key: string): string | undefined {
-  const value = scalarOf(pair);
-  if (typeof value === 'string' && value.trim() !== '') return value;
-  c.fail(valueNode(pair), field, `${key} must be a non-empty text value`);
-  return undefined;
+function nonEmptyText(c: Checker, pair: Pair, field: string, key: string, options: TextOptions = {}): string | undefined {
+  return checkedText(c, valueNode(pair), scalarOf(pair), field, key, options);
+}
+
+/** The same check for a value that is not on a pair, such as a list item. `node` is where an error points. */
+function checkedText(c: Checker, node: unknown, value: unknown, field: string, key: string, options: TextOptions = {}): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') {
+    c.fail(node, field, `${key} must be a non-empty text value`);
+    return undefined;
+  }
+  const badCharacter = options.multiline ? hasControlCharacter(value) : hasControlCharacter(value) || /[\n\t]/.test(value);
+  if (badCharacter) {
+    const allowed = options.multiline ? ' other than newline and tab' : ', a newline, or a tab';
+    c.fail(node, field, `${key} must not hold a control character${allowed}`);
+    return undefined;
+  }
+  if (options.noLeadingHyphen && value.trimStart().startsWith('-')) {
+    c.fail(node, field, `${key} must not start with "-", which a command could read as an option`);
+    return undefined;
+  }
+  return value;
 }
 
 /** A name that follows the path-safe name rule, or undefined after reporting why it does not. */
@@ -144,7 +187,7 @@ function checkCrewSource(c: Checker, root: YAMLMap): CrewSource | undefined {
   const gitPair = pairOf(map, 'git');
   const refPair = pairOf(map, 'ref');
   if (pathPair) source.path = nonEmptyText(c, pathPair, 'crew.path', 'path');
-  if (refPair) source.ref = nonEmptyText(c, refPair, 'crew.ref', 'ref');
+  if (refPair) source.ref = nonEmptyText(c, refPair, 'crew.ref', 'ref', { noLeadingHyphen: true });
   if (gitPair) source.git = checkGitUrl(c, gitPair);
   if (Boolean(pathPair) === Boolean(gitPair)) {
     c.fail(map, 'crew', 'crew must set exactly one of path and git');
@@ -168,9 +211,8 @@ function checkRequire(c: Checker, root: YAMLMap): string[] {
   }
   const files: string[] = [];
   pair.value.items.forEach((item, index) => {
-    const value = isScalar(item) ? item.value : undefined;
-    if (typeof value === 'string' && value.trim() !== '') files.push(value);
-    else c.fail(item as Node, `require[${index}]`, 'require items must be non-empty text values');
+    const file = checkedText(c, item, isScalar(item) ? item.value : undefined, `require[${index}]`, 'require item');
+    if (file !== undefined) files.push(file);
   });
   return files;
 }
@@ -231,7 +273,7 @@ function checkRoleKind(c: Checker, map: YAMLMap, at: string): { role?: string; b
   const value = scalarOf(builtinPair);
   const builtin = BUILTIN_ROLES.find((known) => known === value);
   if (builtin) return { builtin, match: builtin };
-  c.fail(builtinPair.value as Node, `${at}.builtin`, `builtin must be one of ${BUILTIN_ROLES.join(', ')}`);
+  c.fail(valueNode(builtinPair), `${at}.builtin`, `builtin must be one of ${BUILTIN_ROLES.join(', ')}`);
   return { match: nameOf(builtinPair) };
 }
 
@@ -252,13 +294,13 @@ function checkKickoff(c: Checker, map: YAMLMap, at: string, kind: { role?: strin
     c.fail(map, `${at}.kickoff`, 'kickoff is required on a builtin entry');
     return undefined;
   }
-  return nonEmptyText(c, pair, `${at}.kickoff`, 'kickoff');
+  return nonEmptyText(c, pair, `${at}.kickoff`, 'kickoff', { multiline: true });
 }
 
 function checkRole(c: Checker, node: unknown, index: number): RoleDraft {
   const at = `roles[${index}]`;
   if (!isMap(node)) {
-    c.fail(node as Node, at, 'each role entry must be a map with role or builtin');
+    c.fail(node, at, 'each role entry must be a map with role or builtin');
     return { role: undefined, matchValue: undefined, lanes: DEFAULT_LANES };
   }
   const before = c.errors.length;
@@ -268,7 +310,7 @@ function checkRole(c: Checker, node: unknown, index: number): RoleDraft {
   const namePair = pairOf(node, 'name');
   const name = namePair ? pathSafeName(c, namePair, `${at}.name`, 'name') : undefined;
   const modelPair = pairOf(node, 'model');
-  const model = modelPair ? nonEmptyText(c, modelPair, `${at}.model`, 'model') : undefined;
+  const model = modelPair ? nonEmptyText(c, modelPair, `${at}.model`, 'model', { noLeadingHyphen: true }) : undefined;
   const permissionMode = checkPermissionMode(c, node, `${at}.permission_mode`);
   const restricted = checkRestricted(c, node, `${at}.restricted`);
   const lanes = checkLanes(c, node, `${at}.lanes`);
@@ -307,21 +349,45 @@ function checkFront(c: Checker, root: YAMLMap, drafts: RoleDraft[] | undefined):
   const front = nonEmptyText(c, pair, 'front', 'front');
   if (front === undefined || drafts === undefined) return front;
   const matches = drafts.filter((draft) => draft.matchValue === front);
+  const [only] = matches;
   if (matches.length === 0) {
-    c.fail(valueNode(pair), 'front', `front ${shown(front)} names no entry in roles`);
+    // A rejected entry may be the one meant, so "names no entry" would mislead.
+    if (drafts.every((draft) => draft.role !== undefined)) {
+      c.fail(valueNode(pair), 'front', `front ${shown(front)} names no entry in roles`);
+    }
   } else if (matches.length > 1) {
     c.fail(valueNode(pair), 'front', `front ${shown(front)} is ambiguous: ${matches.length} entries have that role or builtin value`);
-  } else if ((matches[0] as RoleDraft).lanes > 1) {
+  } else if (only && only.lanes > 1) {
     c.fail(valueNode(pair), 'front', `front ${shown(front)} names an entry with lanes above 1; the front role has one lane`);
   }
   return front;
 }
 
-function yamlErrors(c: Checker, errors: readonly { message: string; linePos?: [{ line: number }, ...unknown[]] }[]): void {
-  for (const error of errors) {
-    const reason = error.message.split('\n')[0] ?? 'the YAML cannot be read';
-    c.errors.push({ file: c.file, line: error.linePos?.[0].line ?? 1, field: '(file)', reason });
+interface YamlProblem {
+  message: string;
+  code: string;
+  pos: [number, number];
+}
+
+function yamlProblems(c: Checker, problems: readonly YamlProblem[]): void {
+  for (const problem of problems) {
+    const reason =
+      problem.code === 'MULTIPLE_DOCS'
+        ? 'the file must hold one YAML document'
+        : (problem.message.split('\n')[0] ?? 'the YAML cannot be read');
+    c.errors.push({ file: c.file, line: c.lineAt(problem.pos[0]), field: '(file)', reason });
   }
+}
+
+/** Fails an alias and any explicit tag outside the YAML core schema. An anchor alone is harmless. */
+function checkTagsAndAliases(c: Checker, doc: Document): void {
+  visit(doc, (_key, node) => {
+    if (isAlias(node)) {
+      c.fail(node, '(file)', `an alias (*${node.source}) is not allowed; write the value out`);
+    } else if ((isScalar(node) || isCollection(node)) && node.tag !== undefined && !CORE_YAML_TAGS.includes(node.tag)) {
+      c.fail(node, '(file)', `the tag ${shown(node.tag)} is not allowed; only YAML core tags are`);
+    }
+  });
 }
 
 /**
@@ -330,12 +396,23 @@ function yamlErrors(c: Checker, errors: readonly { message: string; linePos?: [{
  */
 export function parseCrewYml(text: string, file: string): CrewParseResult {
   const counter = new LineCounter();
-  const doc = parseDocument(text, { lineCounter: counter, prettyErrors: true, uniqueKeys: true });
+  // No merge key and YAML 1.2 core rules. No alias ever expands: the checks read the
+  // node tree, never `toJS`, and `checkTagsAndAliases` fails every alias node.
+  // (`maxAliasCount` is a `toJS` option in this library, not a parse option.)
+  const doc = parseDocument(text, {
+    lineCounter: counter,
+    prettyErrors: true,
+    uniqueKeys: true,
+    merge: false,
+    version: '1.2',
+  });
   const c = new Checker(file, counter);
   if (doc.errors.length > 0) {
-    yamlErrors(c, doc.errors);
+    yamlProblems(c, doc.errors);
     return { ok: false, errors: c.errors };
   }
+  yamlProblems(c, doc.warnings);
+  checkTagsAndAliases(c, doc);
   const root = doc.contents;
   if (!isMap(root)) {
     c.errors.push({ file, line: 1, field: '(file)', reason: 'the file must be a map with version, harness, crew, front, and roles' });
@@ -365,14 +442,41 @@ export function parseCrewYml(text: string, file: string): CrewParseResult {
   return { ok: true, config };
 }
 
-/** Reads the one file at `path` and checks it. It touches no other file. */
+/** A human reason for a failed read or stat, with the system code kept in brackets. */
+function readProblem(error: unknown): string {
+  const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
+  switch (code) {
+    case 'ENOENT':
+      return 'the file does not exist';
+    case 'EACCES':
+    case 'EPERM':
+      return 'the file cannot be read: permission denied';
+    case 'EISDIR':
+      return 'the path is not a regular file: it is a folder';
+    default:
+      return `the file cannot be read${code === undefined ? '' : ` (${code})`}`;
+  }
+}
+
+function fileError(path: string, reason: string): CrewParseResult {
+  return { ok: false, errors: [{ file: path, line: 1, field: '(file)', reason }] };
+}
+
+/**
+ * Reads the one file at `path` and checks it. It touches no other file. The
+ * file must be a regular file of at most `MAX_FILE_BYTES`.
+ */
 export function loadCrewYml(path: string): CrewParseResult {
   let text: string;
   try {
+    const info = statSync(path);
+    if (!info.isFile()) return fileError(path, 'the path is not a regular file');
+    if (info.size > MAX_FILE_BYTES) {
+      return fileError(path, `the file is larger than ${MAX_FILE_BYTES} bytes (${MAX_FILE_BYTES / 1024} KiB)`);
+    }
     text = readFileSync(path, 'utf8');
   } catch (error) {
-    const code = error instanceof Error && 'code' in error ? String(error.code) : 'unreadable';
-    return { ok: false, errors: [{ file: path, line: 1, field: '(file)', reason: `cannot read the file (${code})` }] };
+    return fileError(path, readProblem(error));
   }
   return parseCrewYml(text, path);
 }

@@ -58,6 +58,13 @@ export function quoted(value: string): string {
   return JSON.stringify(value);
 }
 
+/** Pads a crew file with a trailing comment line until it is exactly `bytes` bytes long. ASCII text only. */
+export function paddedToBytes(text: string, bytes: number): string {
+  const room = bytes - text.length;
+  if (room < 2) throw new Error('the fixture is already larger than the target');
+  return `${text}${'#'.repeat(room - 1)}\n`;
+}
+
 /** The 1-based line of the nth line that contains `needle`. */
 export function lineContaining(text: string, needle: string, nth = 1): number {
   let seen = 0;
