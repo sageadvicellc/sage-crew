@@ -126,7 +126,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum sections 5 (front command, background command), 6, and 7 (Claude Code).
 - Tests first, `test/crew-claude.test.ts`.
   - Red: `stage` returns the files under `~/.trellis-crew/stage/<session>/`, including a local plugin built from the catalog skills. `foreground` returns `claude --name <name> --append-system-prompt-file <role.md> --plugin-dir <stage plugin> [--model M] "<first prompt>" --add-dir <module folder>`, with the prompt before `--add-dir`. `background` returns the same command plus `--bg --permission-mode <mode>`. `restricted: true` adds `--restricted`. The default mode is `manual`. No command holds `--dangerously-skip-permissions` or `bypassPermissions`. Nothing installs at user scope. Both commands set the working directory to the project root.
-  - Red, path safety: `stage` resolves every path it returns and fails when one is not inside the stage root. A session name or a skill name that breaks the path-safe name rule fails before any file is written. The stage root is created with mode 0700. `stage` refuses a stage root that is a symbolic link, and a stage root that another user owns.
+  - Red, path safety: `stage` resolves every path it returns and fails when one is not inside the stage root. A session name or a skill name that breaks the path-safe name rule fails before any file is written. The stage root is created with mode 0700. `stage` refuses a stage root that is a symbolic link, a stage root that another user owns, a parent folder, `~/.trellis-crew`, that is a symbolic link or has another owner, and a stage root whose real path differs from `<real path of the home folder>/.trellis-crew/stage`.
   - Green: extend `Adapter` in `src/adapters/types.ts` with optional `stage`, `foreground`, and `background` steps, and implement them in `src/adapters/claude-code.ts`. Every other adapter leaves them unset.
 - Files: change `src/adapters/types.ts`, `src/adapters/claude-code.ts`. Add `src/crew/stage.ts`, `test/crew-claude.test.ts`.
 - Extra gates: G. Checks V1, V2, V3, V4, and V5 must be done first. The existing `test/plugin-claude.test.ts` and `test/start.test.ts` must pass unchanged.
@@ -182,7 +182,7 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Spec: addendum section 9.
 - Tests first: `test/store.test.ts`, `test/status.test.ts`, `test/stop.test.ts`, `test/respawn.test.ts`.
   - Red: `team.json` accepts optional `role_module`, `harness`, and `crew_commit`. An older entry without them stays valid and is rewritten unchanged. `status` lists sessions from both paths. `stop` ends sessions from both paths. `respawn <name>` restarts a module session from the recorded module and crew commit, and refuses when the module changed on disk (question Q8). No `sagespec.yml` test changes.
-  - Red, hostile record: a `team.json` file can be edited by hand or by another program, so every value that a command reads from it is checked again. `respawn` fails and starts nothing for a `role_module` that is absolute, has `..`, breaks the path-safe name rule, is a symbolic link that leaves the crew repository, or does not resolve inside `<crew repository>/roles/`. `stop` and `status` skip an entry whose name breaks the path-safe name rule, and print a line that names the entry, and they never pass such a name to a process lookup or a path. A `crew_commit` or `harness` value with a control character is refused.
+  - Red, hostile record: a `team.json` file can be edited by hand or by another program, so every value that a command reads from it is checked again. `respawn` fails and starts nothing for a `role_module` that is absolute, has `..`, breaks the path-safe name rule, is a symbolic link that leaves the crew repository, or does not resolve inside `<crew repository>/roles/`. `stop` and `status` skip an entry whose name breaks the path-safe name rule, and print a line that names the entry, and they never pass such a name to a process lookup or a path. `respawn`, `stop`, and `status` also check `session_id` against its format, `pid` as a positive whole number, `harness` against the list of known harnesses, and `crew_commit` as a hex string of 40 or 64 characters. An entry with any bad value is refused or skipped, and a line names it. `respawn` does not take the crew repository path from `team.json`. It resolves the crew repository again from the `crew.yml` of the project, with the slice 5 resolver, and then checks the recorded `crew_commit` against the loaded commit (question Q8).
   - Red, old entries: an entry from the `sagespec.yml` path has none of the new fields, keeps the name it has today, and goes through the checks that exist today. The new name checks apply to an entry that carries `role_module`, `harness`, or `crew_commit`, and to every name that becomes a path.
   - Green: extend `TeamEntry` and its guard in `src/store/team-json.ts`, then the three commands.
 - Files: change `src/store/team-json.ts`, `src/commands/status.ts`, `src/commands/stop.ts`, `src/commands/respawn.ts`, and the four test files.
@@ -198,10 +198,10 @@ Sources for the plan: the crew addendum (cited as "addendum section N"), `docs/c
 - Tests first, `test/down.test.ts`.
   - Red: `down` reads `team.json` and stops each session with the same code as `stop`. It deletes the stage folder of each session that it stops. It leaves the front session alone. It names any session that has no local process, as `noProcessNote` does today. It is safe to run twice. `USAGE` lists `down`.
   - Red, deletion safety: `down` resolves the real path of each stage folder and deletes it only when that path is inside the stage root. A `team.json` entry named `../../.ssh`, an absolute path, a name with a `/`, and a stage folder that is a symbolic link leaving the stage root each delete nothing, and the run names the entry. A test folder that stands in for the home folder keeps every file.
-  - Red, the stage root itself: `down` refuses to delete anything when the stage root is a symbolic link, and names it. It refuses a stage root that another user owns.
-  - Red, the gap between check and delete: right before each removal, `down` runs `lstat` on the path and refuses any symbolic link. A test replaces a checked stage folder with a symbolic link to a folder that stands in for the home folder, after the check and before the removal, using a hook in the helper. Nothing outside the stage root is deleted, and the run names the entry.
+  - Red, the stage root itself: `down` refuses to delete anything when the stage root is a symbolic link, and names it. It refuses a stage root that another user owns. It also refuses when the parent folder, `~/.trellis-crew`, is a symbolic link or has another owner, and when the real path of the stage root differs from the expected path, `<real path of the home folder>/.trellis-crew/stage`.
+  - Red, the gap between check and delete: a check and a delete are two steps, so a folder can change between them. `down` closes the window this way. It runs `lstat` on the stage folder and keeps its device and inode numbers. It renames the folder into a private quarantine folder under the stage root, with mode 0700. It runs `lstat` on the renamed path, refuses a symbolic link, and refuses when the device and inode numbers differ from the first check. Only then does it delete the renamed folder. A test replaces a checked stage folder with a symbolic link to a folder that stands in for the home folder, after the first check and before the rename, using a hook in the helper. Another test does the swap after the rename. In both, nothing outside the stage root is deleted, the run names the entry, and the folder that stands in for the home folder keeps every file.
   - Red, no links followed: the removal never follows a symbolic link. A stage folder that holds a link to an outside folder loses the link and keeps every file in the target.
-  - Green: `runDown`, on top of `src/commands/stop.ts`, with one helper that checks a path against the stage root, runs `lstat` before each removal, and removes without following links.
+  - Green: `runDown`, on top of `src/commands/stop.ts`, with one helper that checks a path against the stage root, renames the folder into the quarantine folder, checks it again by `lstat` and by device and inode numbers, and removes without following links.
 - Files: add `src/commands/down.ts`, `test/down.test.ts`. Change `src/args.ts`, `src/cli.ts`.
 - Extra gates: G. Check V7 (how to stop a Claude Code background session) must be done first.
 - Size: 4 files, about 260 lines. M.
@@ -360,7 +360,7 @@ Slices 3, 5, 9, 10, and 15 build behavior that group D reverses or depends on. S
   - Its field table says that `roles[].name` and each skill `name` accept only `a` to `z`, `0` to `9`, and `-`, start with a letter or a digit, and stay under a length cap. The merged addendum has this gap.
   - Its section on `respawn`, `stop`, and `status` says that every value read from `team.json` is checked again.
   - Its section on the start plan says that each module path resolves inside `<crew repository>/roles/`.
-  - Its section on the stage folder says that `down` refuses a stage root that is a symbolic link and runs `lstat` before each removal.
+  - Its section on the stage folder says that `down` refuses a stage root or a parent folder that is a symbolic link, renames the folder into a private quarantine folder, checks it again by `lstat` and by device and inode numbers, and only then deletes it.
   - Its section on the crew repository says that a ref is turned into a commit id with `git rev-parse --verify` before checkout.
   - Its section on the stage folder says that `down` deletes only a resolved path inside the stage root. The merged addendum has this gap too.
   - It says that `up` starts the front session on the same terminal and exits with its code, in place of "replaces its own process".
@@ -373,7 +373,7 @@ Slices 3, 5, 9, 10, and 15 build behavior that group D reverses or depends on. S
 
 The plan settles none of these. Each item has an owner, lettered options, a default, and the result of each letter. Reply with the item number and a letter.
 
-A default applies only when the owner does not answer, and only for an item that has one. Three items touch security or consent: decision 2a, decision 3, and question Q1. They have no default on silence. They wait for their owner. Each shows a suggested letter, which never applies on its own.
+A default applies only when the owner does not answer, and only for an item that has one. Three items touch security or consent: decision 2a, decision 3, and question Q1. Each says "No default: it waits for its owner" and shows a suggested letter. A suggested letter never applies on its own.
 
 ### Decisions
 
@@ -381,7 +381,7 @@ A default applies only when the owner does not answer, and only for an item that
    - A. `trellis-crew up`. Default. Result: no new `bin` entry.
    - B. A separate `crew` binary. Result: a new `bin` entry, and renames in slices 9, 11, 13, and 15 and in the front prompt text of slice 7.
 2. **Cursor and the project folder** (addendum section 11, item 2). This is two decisions.
-   - 2a. Ruling: may the Cursor adapter write rule files inside the project? Owner: the Tech Lead. Settle before slice L2. No default: it waits for the owner. Suggested letter: A.
+   - 2a. Ruling: can the Cursor adapter write rule files inside the project? Owner: the Tech Lead. Settle before slice L2. No default: it waits for the owner. Suggested letter: A.
      - A. Yes, with a git exclude line and removal by `down`. Result: slice L2 can exist, and its tests cover the exclude line and the removal.
      - B. No. Result: Cursor stays off until Cursor documents a rules path outside the workspace, and slice L2 waits.
    - 2b. Product: does version 1 support Cursor at all? Owner: the maintainer. Settle before slice L2.
@@ -405,9 +405,9 @@ A default applies only when the owner does not answer, and only for an item that
 
 ### Questions where the spec is unclear
 
-- Q1. Does `up` show the `crew.yml` and ask before it starts sessions? The addendum lists no `--yes` flag. Owner: the maintainer, because it is a consent call. It has a security side too, because `up` can start up to ten sessions per role, each with its permission mode. Settle before slice 10. Default: B, which never applies on silence. It waits for the maintainer.
+- Q1. Does `up` show the `crew.yml` and ask before it starts sessions? The addendum lists no `--yes` flag. Owner: the maintainer, because it is a consent call. It has a security side too, because `up` can start up to ten sessions per role, each with its permission mode. Settle before slice 10. No default: it waits for the maintainer. Suggested letter: B.
   - A. No prompt. Result: `up` starts at once, and slice 10 has no prompt test.
-  - B. The same prompt that `start` shows for a found `sagespec.yml`, with `--yes` to skip it. Result: slice 10 adds the prompt, the `--yes` flag, and a test that no prompt with no terminal and no `--yes` starts nothing.
+  - B. The same prompt that `start` shows for a found `sagespec.yml`, with `--yes` to skip it. Result: slice 10 adds the prompt, the `--yes` flag, and a test that, with no terminal and no `--yes`, `up` starts nothing.
 - Q2. `up --update` with `crew.path`. Owner: the Tech Lead. Settle before slice 5. Question Q12 replaces it once D6 lands.
   - A. Ignore the flag. Default. Result: slice 5 tests that the flag changes nothing.
   - B. Fail with an error. Result: slice 5 tests an exit code 2 and a message.
@@ -464,7 +464,7 @@ The addendum's "Checks before a build" and "Gaps" become these named checks. Eac
 
 Risks:
 
-- **Risk:** a name in `crew.yml`, in a skill catalog, or in `team.json` becomes a path, and `down` deletes a stage folder. The stage root can also be a symbolic link, and a folder can change between the check and the removal. Mitigation: the path-safe name rule in slices 1, 2, 4, 6, 8, 11, and 12, a resolved-path check in slices 8 and 13, a refusal of a stage root that is a link, `lstat` right before each removal, removal without following links, and the same rules in the addendum through slice D7.
+- **Risk:** a name in `crew.yml`, in a skill catalog, or in `team.json` becomes a path, and `down` deletes a stage folder. The stage root can also be a symbolic link, and a folder can change between the check and the removal. Mitigation: the path-safe name rule in slices 1, 2, 4, 6, 8, 11, and 12, a resolved-path check in slices 8 and 13, a refusal of a stage root or parent folder that is a link, a rename into a private quarantine folder with a second check by `lstat` and by device and inode numbers, removal without following links, and the same rules in the addendum through slice D7.
 - **Risk:** a module path in the plan or in `team.json` points outside the crew repository. Mitigation: slices 6, 11, and 12 require that it resolves inside `<crew repository>/roles/`, even when the hash matches.
 - **Risk:** a crew repository can hold hostile text. Mitigation: no code runs from it, the plan holds data only, `spawn` checks the hash and every field again, and the README states the trust rule (slice 15).
 - **Risk:** the plan file or its environment variables get forged. Mitigation: the checks in slice 6, and tests for each failure.
