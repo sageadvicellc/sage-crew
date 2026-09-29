@@ -26,6 +26,10 @@ native format through that harness's adapter.
 
 The `sagespec.yml` path stays as it is. Section 9 covers compatibility.
 
+The existing commands `install`, `start`, `status`, `stop`, and `respawn`
+are defined in `docs/cli-addendum.md`. The `Adapter` interface, with its
+`launch` and `installPlugin` steps, is in `src/adapters/types.ts`.
+
 ## 1. The commands
 
 ```
@@ -81,8 +85,12 @@ roles:
 | `crew.git` | one of `path`, `git` | A git remote URL for the crew repository. Only `https://` and `ssh://` (or `git@host:`) URLs are accepted. |
 | `crew.ref` | no | The branch, tag, or commit to use with `crew.git`. Default: the remote's default branch. |
 | `require` | no | Files that must exist in the project root before anything starts. |
-| `front` | yes | The role that runs in the foreground. It names one entry in `roles`. |
-| `roles[].role` | yes | The role module name: lowercase letters, digits, and hyphens. |
+| `front` | yes | The role that runs in the foreground. It names one entry in `roles`, by its `role` or `builtin` value. |
+| `roles[].role` | one of `role`, `builtin` | The role module name: lowercase letters, digits, and hyphens. |
+| `roles[].builtin` | one of `role`, `builtin` | A built-in role: `lead`, `standby`, `auditor`, or `reporting-chain`. Section 9 covers it. |
+| `roles[].kickoff` | with `builtin` only | The first prompt for a built-in role, as in `sagespec.yml`. |
+| `roles[].permission_mode` | no | The permission mode for a background session: `manual`, `acceptEdits`, `auto`, `dontAsk`, or `plan`. Default: `manual`. Section 6 covers it. |
+| `roles[].restricted` | no | `true` adds the harness's restricted mode. Default: `false`. Section 7 covers it. |
 | `roles[].model` | no | Passed to the harness's model flag. |
 | `roles[].lanes` | no | An integer from 1 to 10. Default: 1. The front role always has one lane. |
 | `roles[].name` | no | The session name prefix. Default: the value of `role`. |
@@ -94,8 +102,13 @@ the field, and the reason, then exits with code 2 and starts nothing.
 - `harness` has an adapter, and the harness is installed and detected.
 - `front` names exactly one entry in `roles`, and that entry has no
   `lanes` value above 1.
+- Each `roles` entry sets exactly one of `role` and `builtin`. A
+  `builtin` entry sets `kickoff`, and a `role` entry does not.
 - Each `roles[].role` names a folder that exists in the crew repository.
 - Each module passes the module checks in section 4.
+- No `permission_mode` is `bypassPermissions`. That value fails the
+  check, because the CLI never starts a session that skips permission
+  checks.
 - No two sessions share a name. Section 6 gives the naming rule.
 - Each file under `require` exists in the project root.
 
@@ -117,6 +130,13 @@ entry is an unknown field in version 1.
    run can be repeated.
 4. The CLI never runs code from the crew repository. Section 4 covers
    start scripts.
+5. Crew content is trusted input. Its `role.md`, skills, and memory
+   become prompt content for every session. Use only a crew repository
+   whose content you trust as much as your own instructions.
+6. With `crew.git`, `up` refuses to start when the cached clone has
+   local changes, and tells the person to run `up --update`. A session
+   can write into its module folder (section 5), so this check keeps a
+   change made in one run out of the next.
 
 ## 4. The role module
 
@@ -170,33 +190,51 @@ describes.
 1. The role prompt: `role.md`.
 2. The first prompt: `start.prompt`, followed by the list of `memory/`
    files as paths the session can read.
-3. The module folder: read access to `roles/<name>/`.
+3. The module folder: tool access to `roles/<name>/`. On Claude Code,
+   `--add-dir` allows tool access, which includes writes, not only reads.
+   A role that must not write there runs with `--restricted` (section 7).
 4. The skills: each `SKILL.md` that the catalog lists.
 
 The sequence:
 
-1. `up` validates the config and every module, and writes a start plan
-   to `~/.trellis-crew/plan/<plan id>.json`. The plan lists each
-   background session with its launch arguments.
-2. `up` replaces its process with the front session, in the foreground,
-   in the same terminal. The environment variable `TRELLIS_CREW_PLAN`
-   carries the plan id to that session.
-3. The front session's first prompt starts with one extra line: run
+1. `up` validates the config and every module, and writes a start plan.
+   The plan folder `~/.trellis-crew/plan/` has mode 0700. The plan file
+   has mode 0600 and a random 128-bit id, written as 32 hex characters,
+   as its file name.
+2. The plan holds data, not commands: for each background session, its
+   role, lane, name, module path, model, and permission mode. It never
+   holds a command line.
+3. `up` computes the SHA-256 hash of the plan file. Then it replaces its
+   process with the front session, in the foreground, in the same
+   terminal. Two environment variables go to that session:
+   `TRELLIS_CREW_PLAN`, the plan id, and `TRELLIS_CREW_PLAN_SHA256`, the
+   hash.
+4. The front session's first prompt starts with one extra line: run
    `trellis-crew spawn`, then continue with the role's own start prompt.
    The front session runs it through its own shell tool, under the
    harness's own permission rules, so the person sees and approves it.
-4. `spawn` reads the plan named by `TRELLIS_CREW_PLAN`, starts each
-   background session with the harness's background mode, records each
-   one in `team.json`, and exits. It refuses to run when
-   `TRELLIS_CREW_PLAN` is unset or names a plan that does not exist, so a
-   stray call starts nothing. A plan runs once. A second `spawn` on the
-   same plan starts nothing and says so.
+5. `spawn` checks the plan before it starts anything:
+   - `TRELLIS_CREW_PLAN` is 32 hex characters. `spawn` reads only
+     `~/.trellis-crew/plan/<id>.json`. The variable is never a path.
+   - The file is a regular file, not a symbolic link, owned by the
+     current user, with mode 0600.
+   - Its SHA-256 hash equals `TRELLIS_CREW_PLAN_SHA256`.
+   - Each module path passes the module checks in section 4 again.
+6. `spawn` builds each launch command itself, through the adapter's
+   `background` step, from the plan's data. It starts each background
+   session, records each one in `team.json`, and exits.
+7. Any failed check starts nothing and names the check. A plan runs once:
+   `spawn` renames it to `<id>.used` before it starts the first session,
+   so a second `spawn` on the same plan starts nothing and says so.
 
 On Claude Code, the front command is
-`claude --name <name> --append-system-prompt-file <role.md> [--model M] "<first prompt>" --add-dir <module folder>`.
+`claude --name <name> --append-system-prompt-file <role.md> --plugin-dir <stage plugin> [--model M] "<first prompt>" --add-dir <module folder>`.
 The prompt comes before `--add-dir`, because `--add-dir` accepts more
 than one directory and would otherwise read the prompt as a directory.
-Each background command is the same command with `--bg` added.
+Each background command is the same command with
+`--bg --permission-mode <mode>` added. The CLI never passes
+`--dangerously-skip-permissions` or `--permission-mode bypassPermissions`
+to any session.
 
 ## 6. Foreground, background, and lanes
 
@@ -208,6 +246,12 @@ Each background command is the same command with `--bg` added.
   at once. On Codex it is the existing supervisor from
   `docs/cli-addendum.md` section 2. On Cursor it is a supervised
   `agent -p` process.
+- A background session has no person at its terminal to answer a
+  permission prompt. It runs in the role's `permission_mode`. The
+  default, `manual`, leaves each prompt waiting until a person attaches
+  with `claude attach <id>` and answers it. The foreground session asks
+  its own person in the normal way. `bypassPermissions` is never allowed
+  (section 2).
 - `lanes: N` starts N background sessions of a role. With N equal to 1,
   the session name is the role's `name`. With N above 1, the names are
   `<name>-1` to `<name>-N`.
@@ -231,21 +275,27 @@ the stage folder of each session that it stops.
 
 ### Claude Code
 
-This is the one adapter whose foreground and background modes are both
-verified against the vendor documentation.
+The foreground start, the background start, the permission mode, and the
+per-session skills route are each documented, either in the vendor
+documentation or in the local `claude --help`.
 
 - Foreground: `claude` with a positional prompt starts an interactive
   session with that prompt. Background: `--bg` starts a background
   session and returns at once.
+- Permission mode: `--permission-mode <mode>` for each background
+  session, from the role's `permission_mode`. A role can also set
+  `restricted: true`, which adds `--restricted`. That flag removes the
+  tools that run commands or code, confines file tools to the working
+  directories, and refuses `bypassPermissions`.
 - Role prompt: `--append-system-prompt-file <role.md>`.
-- Module folder: `--add-dir <module folder>`. The docs state that most
-  `.claude/` configuration in an added directory is not discovered, so
-  the skills need their own route.
+- Module folder: `--add-dir <module folder>`. This allows tool access,
+  including writes. The docs state that most `.claude/` configuration in
+  an added directory is not discovered, so the skills need their own
+  route.
 - Skills: the adapter builds a local plugin in the stage folder from the
-  catalog's skills, and installs it through the existing `installPlugin`
-  step. Gap: a per-session plugin directory flag is not verified in this
-  addendum. Until a build verifies one, the plugin is installed at user
-  scope and is shared across Claude Code sessions.
+  catalog's skills, and passes it with `--plugin-dir <stage plugin>`,
+  which loads a plugin for that session only. Nothing is installed at
+  user scope, so a crew adds no skills to any other session.
 - Memory: the first prompt lists the memory files. The session reads
   them with its own tools.
 
@@ -291,11 +341,12 @@ verified against the vendor documentation.
 ### Routing between harnesses
 
 Version 1 runs one harness for the whole crew, so it routes nothing
-between harnesses. It does not restate the terms-of-service or parity
-findings for Codex and Cursor. Those live in the maintainer's separate
-routing design for Codex and Cursor, which this addendum reuses as is.
-The Codex and Cursor adapters stay off until that design's open
-decisions are closed.
+between harnesses. The Codex and Cursor adapters stay off until a
+routing design is published in this repository. That design covers
+three terms for each vendor: whether its terms of service allow an
+outside program to drive its CLI, which of the crew's rules its CLI can
+follow and which need a wrapper, and whether its remaining usage can be
+read.
 
 ## 8. The project-root check
 
@@ -317,9 +368,10 @@ default path exists. A crew that needs a specific root names it through
   background.
 - `trellis-crew up` reads only `crew.yml`. It ignores `sagespec.yml`.
 - A `crew.yml` role can name a built-in role as `builtin: lead` in place
-  of `role:`. That session uses the built-in skills and an inline
-  `kickoff`, exactly as `sagespec.yml` does today. So one team can mix
-  built-in roles and module roles.
+  of `role:`, with an inline `kickoff`. That session uses the built-in
+  skills, exactly as `sagespec.yml` does today. So one team can mix
+  built-in roles and module roles. Section 2 lists the fields and the
+  checks.
 - `team.json` gains three optional fields: `role_module`, `harness`, and
   `crew_commit`. An older entry without them stays valid.
 - `status`, `stop`, and `respawn` work on sessions from either path.
@@ -333,7 +385,7 @@ the section above that closes it.
 2. There is no start entry other than the inline kickoff: section 5.
 3. There is no catalog reader: section 4.
 4. There is no role prompt file, so the role lives only in the kickoff: sections 5 and 7.
-5. There is no read access to the role folder: section 5 (`--add-dir`).
+5. There is no tool access to the role folder: section 5 (`--add-dir`).
 6. There is no memory reader: sections 4 and 5.
 7. Skills are flat and shared by every session: section 7, per adapter.
 8. There is no project-root check before a start: section 8.
@@ -350,8 +402,9 @@ the section above that closes it.
    excluded from git and removed by `down`. The alternatives are to accept
    that, or to leave Cursor out until it documents a rules path outside
    the workspace.
-3. Whether `crew.git` may name a private remote, which needs the user's
-   own git credentials, or only a public one.
+3. Whether `crew.git` can name a private remote, which needs the user's
+   own git credentials, or only a public one. Either way, crew content
+   is trusted input (section 3).
 4. The memory size cap of 256 KiB.
 
 ## Later work
@@ -363,16 +416,25 @@ the section above that closes it.
 - A foreground session on Codex or Cursor, once a build verifies each
   one's interactive start flags.
 
+## Checks before a build
+
+A build checks these claims against the vendor documentation first:
+
+- Claude Code: the prompt placed before `--add-dir`, and `.claude/`
+  discovery in an added folder.
+- Codex: the `codex exec` flags, and the `AGENTS.md` and skills paths.
+- Cursor: `agent -p --workspace`, and the rules and skills paths.
+- Codex and Cursor: whether hooks run in non-interactive mode.
+- Every link under Sources.
+
 ## Gaps
 
-- Claude Code: a flag that loads a plugin or skills folder for one
-  session only is not verified here.
 - Codex: the interactive start flags, and whether `CODEX_HOME` moves the
   global `AGENTS.md` and the skills folder, are not verified here.
 - Cursor: the interactive start flags are not verified here, and the
   subagent file format is not published on the page read.
 - Codex and Cursor: whether hooks run in non-interactive mode is not
-  published. The routing design records this gap too.
+  published.
 
 ## Sources
 
@@ -381,6 +443,9 @@ Retrieved 2026-09-29.
 - Claude Code CLI reference, the positional prompt and the flags
   `--append-system-prompt-file`, `--add-dir`, `--name`, `--model`, `--bg`:
   https://code.claude.com/docs/en/cli-reference
+- Claude Code local help, `claude --help` in Claude Code 2.1.285: the
+  flags `--permission-mode`, `--restricted`, `--plugin-dir`, and
+  `--add-dir`.
 - Claude Code skills, project and nested locations:
   https://code.claude.com/docs/en/skills
 - Claude Code subagents, `.claude/agents/`:
