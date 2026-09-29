@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+
 /** Builders for `crew.yml` text. Placeholder values only. */
 
 export const CREW_FILE = 'crew.yml';
@@ -56,6 +58,16 @@ export function crewWithRole(...roleLines: string[]): string {
 /** A YAML double-quoted string, so control and Unicode characters reach the parser intact. */
 export function quoted(value: string): string {
   return JSON.stringify(value);
+}
+
+/** Makes a FIFO at `path`. False when the platform has no `mkfifo`. */
+export function makeFifo(path: string): boolean {
+  try {
+    execFileSync('mkfifo', [path]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Pads a crew file with a trailing comment line until it is exactly `bytes` bytes long. ASCII text only. */

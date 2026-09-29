@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import {
   isAlias,
   isCollection,
@@ -451,6 +451,8 @@ function readProblem(error: unknown): string {
     case 'EACCES':
     case 'EPERM':
       return 'the file cannot be read: permission denied';
+    case 'ELOOP':
+      return 'the path is a symbolic link, which is not followed';
     case 'EISDIR':
       return 'the path is not a regular file: it is a folder';
     default:
@@ -462,21 +464,54 @@ function fileError(path: string, reason: string): CrewParseResult {
   return { ok: false, errors: [{ file: path, line: 1, field: '(file)', reason }] };
 }
 
+export type CappedRead = { tooLarge: true } | { tooLarge: false; text: string };
+
+/**
+ * Reads an open file from its current position, at most `cap + 1` bytes. More
+ * than `cap` bytes means the file is too large, even when it grew after a
+ * size check. Knows no path, and never holds more than `cap + 1` bytes.
+ */
+export function readCapped(fd: number, cap: number): CappedRead {
+  const buffer = Buffer.allocUnsafe(cap + 1);
+  let length = 0;
+  while (length < buffer.length) {
+    const count = readSync(fd, buffer, length, buffer.length - length, null);
+    if (count === 0) break;
+    length += count;
+  }
+  if (length > cap) return { tooLarge: true };
+  return { tooLarge: false, text: buffer.toString('utf8', 0, length) };
+}
+
+const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+
+/**
+ * Opens the path once. Every check and the read use that one handle, so a
+ * file swapped after the open changes nothing. No symbolic link is followed,
+ * and O_NONBLOCK keeps a FIFO from hanging the open.
+ */
+function readOnce(path: string): { text: string } | { reason: string } {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, OPEN_FLAGS);
+    const info = fstatSync(fd);
+    if (!info.isFile()) return { reason: 'the path is not a regular file' };
+    const tooLarge = { reason: `the file is larger than ${MAX_FILE_BYTES} bytes (${MAX_FILE_BYTES / 1024} KiB)` };
+    if (info.size > MAX_FILE_BYTES) return tooLarge;
+    const read = readCapped(fd, MAX_FILE_BYTES);
+    return read.tooLarge ? tooLarge : { text: read.text };
+  } catch (error) {
+    return { reason: readProblem(error) };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /**
  * Reads the one file at `path` and checks it. It touches no other file. The
  * file must be a regular file of at most `MAX_FILE_BYTES`.
  */
 export function loadCrewYml(path: string): CrewParseResult {
-  let text: string;
-  try {
-    const info = statSync(path);
-    if (!info.isFile()) return fileError(path, 'the path is not a regular file');
-    if (info.size > MAX_FILE_BYTES) {
-      return fileError(path, `the file is larger than ${MAX_FILE_BYTES} bytes (${MAX_FILE_BYTES / 1024} KiB)`);
-    }
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    return fileError(path, readProblem(error));
-  }
-  return parseCrewYml(text, path);
+  const read = readOnce(path);
+  return 'text' in read ? parseCrewYml(read.text, path) : fileError(path, read.reason);
 }

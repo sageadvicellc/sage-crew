@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadCrewYml, parseCrewYml } from '../src/crew/load.ts';
+import { loadCrewYml, parseCrewYml, readCapped } from '../src/crew/load.ts';
 import { MAX_FILE_BYTES, type CrewError } from '../src/crew/schema.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import {
@@ -13,6 +13,7 @@ import {
   GIT_SCP,
   GIT_SSH,
   lineContaining,
+  makeFifo,
   paddedToBytes,
   quoted,
 } from './helpers/crew.ts';
@@ -662,6 +663,86 @@ describe('loadCrewYml: the file itself', () => {
       expect(result.errors[0]?.reason).toMatch(/does not exist/);
       expect(result.errors[0]?.reason).not.toBe('ENOENT');
     }
+  });
+});
+
+describe('loadCrewYml: one open, no swap between check and read', () => {
+  function tempDir(): string {
+    return mkdtempSync(join(makeFixtureHome(), 'crew-'));
+  }
+
+  function reasonOf(path: string): string | undefined {
+    const result = loadCrewYml(path);
+    return result.ok ? undefined : result.errors[0]?.reason;
+  }
+
+  it('refuses a symbolic link to a valid file, and says so', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'real.yml'), crewYml());
+    symlinkSync(join(dir, 'real.yml'), join(dir, 'crew.yml'));
+    expect(reasonOf(join(dir, 'crew.yml'))).toMatch(/symbolic link/);
+  });
+
+  it('refuses a FIFO as not a regular file, and returns promptly', { timeout: 2000 }, (context) => {
+    const fifo = join(tempDir(), 'crew.yml');
+    if (!makeFifo(fifo)) context.skip();
+    expect(reasonOf(fifo)).toMatch(/not a regular file/);
+  });
+
+  it('still refuses a directory and a missing file with their own reasons', () => {
+    const dir = tempDir();
+    expect(reasonOf(dir)).toMatch(/not a regular file/);
+    expect(reasonOf(join(dir, 'missing.yml'))).toMatch(/does not exist/);
+  });
+
+  it('an empty file still reaches the YAML check', () => {
+    const file = join(tempDir(), 'crew.yml');
+    writeFileSync(file, '');
+    const result = loadCrewYml(file);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0]?.reason).toMatch(/map/);
+  });
+
+  describe('readCapped', () => {
+    function readWith(content: string | Buffer, cap: number): ReturnType<typeof readCapped> {
+      const file = join(tempDir(), 'data.txt');
+      writeFileSync(file, content);
+      const fd = openSync(file, 'r');
+      try {
+        return readCapped(fd, cap);
+      } finally {
+        closeSync(fd);
+      }
+    }
+
+    it('returns the text of a file at exactly the cap', () => {
+      expect(readWith('a'.repeat(10), 10)).toEqual({ tooLarge: false, text: 'a'.repeat(10) });
+    });
+
+    it('returns the empty text of an empty file', () => {
+      expect(readWith('', 10)).toEqual({ tooLarge: false, text: '' });
+    });
+
+    it('reports a file one byte over the cap as too large', () => {
+      expect(readWith('a'.repeat(11), 10)).toEqual({ tooLarge: true });
+    });
+
+    it('stops at the cap on a huge file without reading it all', () => {
+      const file = join(tempDir(), 'sparse.bin');
+      writeFileSync(file, '');
+      truncateSync(file, 4 * 1024 * 1024 * 1024);
+      const fd = openSync(file, 'r');
+      try {
+        expect(readCapped(fd, 1024)).toEqual({ tooLarge: true });
+      } finally {
+        closeSync(fd);
+      }
+    });
+
+    it('decodes multi-byte text by bytes, not characters', () => {
+      expect(readWith('é'.repeat(6), 10)).toEqual({ tooLarge: true });
+      expect(readWith('é'.repeat(5), 10)).toEqual({ tooLarge: false, text: 'é'.repeat(5) });
+    });
   });
 });
 
