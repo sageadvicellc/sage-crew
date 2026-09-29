@@ -93,7 +93,7 @@ roles:
 | `roles[].restricted` | no | `true` adds the harness's restricted mode. Default: `false`. Section 7 covers it. |
 | `roles[].model` | no | Passed to the harness's model flag. |
 | `roles[].lanes` | no | An integer from 1 to 10. Default: 1. The front role always has one lane. |
-| `roles[].name` | no | The session name prefix. Default: the value of `role`. |
+| `roles[].name` | no | The session name prefix. Default: the value of `role`, or of `builtin` for a built-in entry. |
 
 Checks before anything starts. Each failed check prints the file, the line,
 the field, and the reason, then exits with code 2 and starts nothing.
@@ -192,7 +192,10 @@ describes.
    files as paths the session can read.
 3. The module folder: tool access to `roles/<name>/`. On Claude Code,
    `--add-dir` allows tool access, which includes writes, not only reads.
-   A role that must not write there runs with `--restricted` (section 7).
+   This addendum offers no read-only guarantee for the module folder.
+   `--restricted` does not give one, because it confines the file tools
+   to the working directories, and those include each `--add-dir` folder
+   (section 7).
 4. The skills: each `SKILL.md` that the catalog lists.
 
 The sequence:
@@ -247,9 +250,11 @@ to any session.
   `docs/cli-addendum.md` section 2. On Cursor it is a supervised
   `agent -p` process.
 - A background session has no person at its terminal to answer a
-  permission prompt. It runs in the role's `permission_mode`. The
-  default, `manual`, leaves each prompt waiting until a person attaches
-  with `claude attach <id>` and answers it. The foreground session asks
+  permission prompt. It runs in the role's `permission_mode`, default
+  `manual`. A person opens a background session in the terminal with
+  `claude attach <id>`. Gap: this addendum does not verify that a prompt
+  in `manual` mode waits for an attach, rather than failing the tool
+  call. A build verifies it first. The foreground session asks
   its own person in the normal way. `bypassPermissions` is never allowed
   (section 2).
 - `lanes: N` starts N background sessions of a role. With N equal to 1,
@@ -285,8 +290,11 @@ documentation or in the local `claude --help`.
 - Permission mode: `--permission-mode <mode>` for each background
   session, from the role's `permission_mode`. A role can also set
   `restricted: true`, which adds `--restricted`. That flag removes the
-  tools that run commands or code, confines file tools to the working
-  directories, and refuses `bypassPermissions`.
+  tools that run commands or code, confines the file tools to the
+  working directories, `--add-dir` folders included, and refuses
+  `bypassPermissions`. So a restricted session can still write in the
+  module folder. It cannot write outside the project root and the module
+  folder.
 - Role prompt: `--append-system-prompt-file <role.md>`.
 - Module folder: `--add-dir <module folder>`. This allows tool access,
   including writes. The docs state that most `.claude/` configuration in
@@ -429,6 +437,9 @@ A build checks these claims against the vendor documentation first:
 
 ## Gaps
 
+- Claude Code: whether a permission prompt in a `manual` background
+  session waits for `claude attach`, or fails the tool call, is not
+  verified here.
 - Codex: the interactive start flags, and whether `CODEX_HOME` moves the
   global `AGENTS.md` and the skills folder, are not verified here.
 - Cursor: the interactive start flags are not verified here, and the
@@ -443,9 +454,9 @@ Retrieved 2026-09-29.
 - Claude Code CLI reference, the positional prompt and the flags
   `--append-system-prompt-file`, `--add-dir`, `--name`, `--model`, `--bg`:
   https://code.claude.com/docs/en/cli-reference
-- Claude Code local help, `claude --help` in Claude Code 2.1.285: the
-  flags `--permission-mode`, `--restricted`, `--plugin-dir`, and
-  `--add-dir`.
+- Claude Code local help, `claude --help` and `claude attach --help` in
+  Claude Code 2.1.285: the flags `--permission-mode`, `--restricted`,
+  `--plugin-dir`, and `--add-dir`, and the `attach <id>` command.
 - Claude Code skills, project and nested locations:
   https://code.claude.com/docs/en/skills
 - Claude Code subagents, `.claude/agents/`:
@@ -458,7 +469,11 @@ Retrieved 2026-09-29.
 - Codex non-interactive mode: https://learn.chatgpt.com/docs/non-interactive-mode
 - Codex CLI flags `-C`, `-m`, `--add-dir`, `--profile`:
   https://learn.chatgpt.com/docs/developer-commands?surface=cli
+- Codex local help, `codex exec --help` in codex-cli 0.157.0: the flags
+  `-C`, `-m`, `--add-dir`, and `--sandbox`, with the values `read-only`,
+  `workspace-write`, and `danger-full-access`.
 - Cursor rules: https://cursor.com/docs/context/rules
-- Cursor CLI: https://cursor.com/docs/cli/overview and
+- Cursor CLI, the flags `-p`, `--model`, and `--workspace`:
+  https://cursor.com/docs/cli/overview and
   https://cursor.com/docs/cli/using
 - Cursor skills: https://cursor.com/docs/skills
