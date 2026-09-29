@@ -442,6 +442,8 @@ A build checks these claims against the vendor documentation first:
   verified here.
 - Codex: the interactive start flags, and whether `CODEX_HOME` moves the
   global `AGENTS.md` and the skills folder, are not verified here.
+- Codex: how a staged skills folder reaches one Codex session without
+  writing into the project is not known.
 - Cursor: the interactive start flags are not verified here, and the
   subagent file format is not published on the page read.
 - Codex and Cursor: whether hooks run in non-interactive mode is not
