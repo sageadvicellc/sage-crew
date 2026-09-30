@@ -3,18 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { stateDir } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
 import { ensurePrivateFolder } from '../fs-private.ts';
-import { agentsSkillsDir, exportSkills, skillCheckReport } from './codex-skills.ts';
+import { exportSkills, skillCheckReport } from './codex-skills.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
 /** The skill folders this package carries, one per skill. */
 export function packageSkillsDir(): string {
   return fileURLToPath(new URL('../../skills/', import.meta.url));
-}
-
-/** The folder Codex CLI reads user skills from. */
-export function codexSkillsDir(home: string): string {
-  return agentsSkillsDir(home);
 }
 
 /** The supervisor script beside this file: `.ts` when run from source, `.js` when built. */
@@ -28,9 +23,9 @@ export function codexExecArgs(flagArgs: readonly string[], kickoff: string): str
   return ['exec', ...flagArgs, kickoff];
 }
 
-/** Exports each approved skill into `~/.agents/skills/<skill>/`. See codex-skills.ts. */
-function copySkills(ctx: AdapterContext): PluginOutcome {
-  return exportSkills(ctx.env.home, ctx.out);
+/** Exports each approved skill into `.agents/skills/<skill>/` at the project's worktree top, never under home. See codex-skills.ts. */
+function copySkills(ctx: AdapterContext): Promise<PluginOutcome> {
+  return exportSkills(ctx);
 }
 
 /**
@@ -93,7 +88,7 @@ export const codexAdapter: Adapter = {
     return copySkills(ctx);
   },
 
-  checkPlugin(env) {
-    return skillCheckReport(env.home);
+  checkPlugin(ctx) {
+    return skillCheckReport(ctx);
   },
 };

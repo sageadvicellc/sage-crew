@@ -49,7 +49,7 @@ export interface Adapter {
   /** Updates the plugin through the harness. Unset: not built yet. */
   updatePlugin?(ctx: AdapterContext): Promise<PluginOutcome>;
   /** Compares the installed plugin with the one this CLI carries, for `update --check`. It changes nothing. */
-  checkPlugin?(env: Env): PluginCheck;
+  checkPlugin?(ctx: Pick<AdapterContext, 'env' | 'runner'>): Promise<PluginCheck>;
   /** The user settings file whose inbound setting install sets to accept, after a dated backup. */
   inboundTarget?(env: Env): InboundTarget;
   /** Extra status lines from the harness's own session list. */

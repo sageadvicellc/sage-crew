@@ -9,7 +9,7 @@ import { readTeam, readTeamFile, writeTeamFile } from '../src/store/team-json.ts
 import { makeFixtureHome } from './helpers/env.ts';
 import { fixtureBin, repoRoot } from './helpers/paths.ts';
 import { SMALL_TEAM } from './helpers/roles.ts';
-import { installedOn, writeRoles } from './helpers/team.ts';
+import { installedInRepo, installedOn, writeRoles } from './helpers/team.ts';
 
 function alive(pid: number): boolean {
   try {
@@ -127,13 +127,14 @@ describe('Codex CLI', () => {
     expect(team.ok && team.record?.sessions[0]?.pid).toBeNull();
   });
 
-  it('install copies each approved skill folder into ~/.agents/skills with its marker, and update copies them fresh', async () => {
-    const t = installedOn('codex', 'file-mailbox', { fetchLatest: async () => ({ status: 'not-published' }) });
+  it('install copies each approved skill folder into the project .agents/skills with its marker, and update copies them fresh', async () => {
+    const t = installedInRepo('codex', 'file-mailbox', { fetchLatest: async () => ({ status: 'not-published' }) });
     mkdirSync(join(t.env.home, '.codex'));
     expect(await main(['install', '--harness', 'codex'], t.deps)).toBe(0);
     const manifest = JSON.parse(readFileSync(join(repoRoot, '.claude-plugin', 'plugin.json'), 'utf8')) as { skills: string[] };
     const skills = manifest.skills.map((entry) => entry.replace(/^\.\/skills\/|\/$/g, ''));
-    const target = join(t.env.home, '.agents', 'skills');
+    const target = join(t.repo.root, '.agents', 'skills');
+    expect(existsSync(join(t.env.home, '.agents'))).toBe(false);
     expect(readdirSync(target).sort()).toEqual([...skills].sort());
     for (const skill of skills) {
       expect(readFileSync(join(target, skill, 'SKILL.md'), 'utf8')).toBe(readFileSync(join(repoRoot, 'skills', skill, 'SKILL.md'), 'utf8'));

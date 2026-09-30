@@ -117,7 +117,8 @@ that you set and prints a warning that names the session and the field.
 - Codex CLI sessions start under one supervisor process. `start` returns
   at once. The supervisor starts each `codex exec` process and records
   its process ID. `stop` ends the supervisor and each session.
-  Install exports the skills for it, as the next section says.
+  Install exports the skills into the project for it, as the next
+  section says.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.
@@ -131,12 +132,42 @@ another folder. The value must not hold a `..` part.
 
 ### The skills on Codex CLI
 
-Codex CLI reads your skills from `~/.agents/skills/`. On Codex CLI,
-`install` and `update` copy each approved skill there. The approved
-skills are the ones in the `skills` list of `.claude-plugin/plugin.json`.
-A folder under `skills/` that the list leaves out is not copied. The CLI
-never writes skills into your project folder, and it never sets
-`CODEX_HOME`.
+Codex CLI reads skills from these folders, in this order:
+`$CWD/.agents/skills`, `$CWD/../.agents/skills`,
+`$REPO_ROOT/.agents/skills`, `$HOME/.agents/skills`,
+`/etc/codex/skills`, and then its built-in skills. The Codex skills page
+lists them
+(https://learn.chatgpt.com/docs/build-skills, read 2026-09-30).
+
+On Codex CLI, `install` and `update` copy each approved skill into
+`.agents/skills/` at the top of your project. The approved skills are
+the ones in the `skills` list of `.claude-plugin/plugin.json`. A folder
+under `skills/` that the list leaves out is not copied. The export
+never touches `~/.agents/skills/`, because every Codex session on the
+machine reads that folder. The CLI never sets `CODEX_HOME`.
+
+Run the command at the top of a git worktree. For any other folder, the
+command stops and names the step. It also stops for your home folder
+and for `/`. Under the workspace-write sandbox, Codex keeps
+`<writable_root>/.agents` read-only, so a Codex session cannot edit
+the copies.
+
+The export keeps git clean, and it changes no tracked file:
+
+- It adds one line, `/.agents/skills/<skill>/`, for each copied skill
+  to the local exclude file that `git rev-parse --git-path info/exclude`
+  names. That file is not tracked, so the copies do not show in
+  `git status`. The lines sit in a block between
+  `# >>> trellis-crew skills (managed) >>>` and
+  `# <<< trellis-crew skills (managed) <<<`. The CLI changes no line
+  outside that block. Inside it, the CLI changes only its own skill
+  lines, and it warns about any other line. A block with no end line,
+  or two blocks, stops the install. It also stops for a link at
+  `.git/info` or at the exclude file.
+- It never edits `.gitignore`.
+- If git tracks any file in `.agents/skills/<skill>/`, the CLI treats
+  that folder as tracked in git. The install then stops and changes
+  nothing.
 
 - Each copied folder holds a marker file, `.trellis-crew-skill.json`. It
   names the skill and the SHA-256 hash of the folder's files. For the
@@ -151,14 +182,20 @@ never writes skills into your project folder, and it never sets
 - A folder of your own with the name of an approved skill is left alone.
   If you edited a folder that the CLI owns, that folder is left alone
   too. In each case, the install stops, names the folder, and exits 1.
-  It changes nothing in `~/.agents/skills/`. Move or rename the folder,
-  then run the command again.
+  If a folder is not its own, or was edited, the install changes
+  nothing. Move or rename the folder, then run the command again.
 - The CLI replaces each folder it owns. If a skill is no longer
-  approved, the CLI removes the folder it owns for that skill. It also
-  removes its own leftover temp folders, whose names start with
-  `.trellis-crew-`. It touches nothing else in `~/.agents/skills/`.
+  approved, the CLI removes the folder it owns for that skill, and its
+  exclude line. It also removes its own leftover temp folders. Each
+  one is named `.trellis-crew-<skill>-` and six characters, with
+  `-old` after them for a swapped-out copy. Each one holds a marker that
+  names trellis-crew and the skill, and its files match the hash in the
+  marker. If a folder has that name but no such marker, the CLI warns
+  and leaves it alone, and the install goes on. An example is
+  `.trellis-crew-department-lead-backup`. The CLI touches nothing else
+  in `.agents/skills/`, such as a folder named `.trellis-crew-backup`.
 - The CLI does not follow a symbolic link. A link in place of a skill
-  folder, `~/.agents`, or `~/.agents/skills` stops the install.
+  folder, `.agents`, or `.agents/skills` stops the install.
 
 `trellis-crew update --check` also compares each copy with the package.
 It prints one line for each skill, with one of these states:
@@ -167,7 +204,8 @@ It prints one line for each skill, with one of these states:
 - drifted: the CLI owns the copy, and the package changed since the
   copy was made.
 - missing: no folder has the skill's name.
-- not owned: a folder of your own, or a link, has the skill's name.
+- not owned: a folder of your own, a link, or a folder that git tracks
+  has the skill's name.
 - edited since export: the CLI made the copy, and its files changed
   after that.
 - unreadable: reading the folder failed. The line gives the error.
@@ -175,10 +213,13 @@ It prints one line for each skill, with one of these states:
   next install or update adopts it.
 - stale: the CLI owns the folder, and the skill is no longer approved.
 
-Each state except in step and unmarked copy makes the check exit 1. The
-check names each such skill. It also warns about each leftover temp
-folder. A warning does not change the exit code. The check changes
-nothing. Run `trellis-crew update` to copy the skills fresh.
+The check exits 1 for drifted, missing, not owned, edited since
+export, unreadable, and stale, and it names each such skill. If the
+folder is not the top of a git worktree, the check exits 1 too. It warns about
+each leftover temp folder, and about each line in the exclude block that
+the CLI did not write. A warning does not change the exit code. The
+check changes nothing. Run `trellis-crew update` to copy the skills
+fresh.
 
 ### Exit codes
 
