@@ -1,5 +1,6 @@
 import { adapterFor } from '../adapters/index.ts';
-import { EXIT_OK, EXIT_RUNTIME, type CliDeps } from '../deps.ts';
+import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from '../deps.ts';
+import { codexExperimentalProblem } from '../experimental.ts';
 import { findBinary, HARNESSES } from '../detect/probe.ts';
 import { npmFetchLatest, PACKAGE_NAME } from '../registry.ts';
 import type { HarnessId } from '../roles/schema.ts';
@@ -54,6 +55,14 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
   if (!stored.record) {
     deps.err('No install record. Run trellis-crew install first.');
     return EXIT_RUNTIME;
+  }
+  // Codex is behind an experimental flag in this version. Nothing is updated or written before this.
+  if (stored.record.harness === 'codex') {
+    const experimental = codexExperimentalProblem(deps.env.vars);
+    if (experimental !== undefined) {
+      deps.err(experimental);
+      return EXIT_USAGE;
+    }
   }
   const record = { ...stored.record };
   const harness = HARNESSES.find((h) => h.id === record.harness);

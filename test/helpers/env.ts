@@ -20,7 +20,9 @@ export function makeTestEnv(overrides: Partial<Env> = {}): Env {
     codexHome: undefined,
     cwd: home,
     stdinIsTTY: false,
-    vars: { HOME: home, PATH: path },
+    // The experimental Codex flag is on by default here, so the Codex tests reach the code they test.
+    // test/codex-flag.test.ts sets the variable itself, off and on.
+    vars: { HOME: home, PATH: path, TRELLIS_EXPERIMENTAL_CODEX: '1' },
     ...overrides,
   };
 }

@@ -3,6 +3,7 @@ import type { TransportFlag } from '../args.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from '../deps.ts';
 import { confirmHarness, terminalAsk } from '../detect/confirm.ts';
 import { findBinary, HARNESSES, probeHarnesses, type HarnessInfo } from '../detect/probe.ts';
+import { codexExperimentalProblem } from '../experimental.ts';
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam } from '../roles/load.ts';
 import type { RolesConfig, Transport } from '../roles/schema.ts';
@@ -129,6 +130,14 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
   const chosen = await chooseHarness(options, deps);
   if (!chosen.ok) return chosen.code;
   const { harness } = chosen;
+  // Codex is behind an experimental flag in this version, however it was chosen. Nothing is written before this.
+  if (harness.id === 'codex') {
+    const experimental = codexExperimentalProblem(deps.env.vars);
+    if (experimental !== undefined) {
+      deps.err(experimental);
+      return EXIT_USAGE;
+    }
+  }
 
   const transport: Transport = options.transport ?? chosen.stored ?? resolveTransport('auto', harness.tier, {});
   if (transport === 'native' && harness.tier !== 1) {
