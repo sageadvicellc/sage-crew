@@ -1,9 +1,9 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
 import { ensurePrivateFolder } from '../fs-private.ts';
+import { exportSkills, skillCheckReport } from './codex-skills.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
@@ -28,28 +28,9 @@ export function codexExecArgs(flagArgs: readonly string[], kickoff: string): str
   return ['exec', ...flagArgs, kickoff];
 }
 
-/**
- * Copies each skill folder into `~/.agents/skills/<skill>/`. It first
- * removes only the folders this package owns, so a stale file goes and
- * every other skill stays.
- */
+/** Exports each approved skill into `~/.agents/skills/<skill>/`. See codex-skills.ts. */
 function copySkills(ctx: AdapterContext): PluginOutcome {
-  const source = packageSkillsDir();
-  if (!existsSync(source)) return { ok: false, message: `the skill folders are missing from this package: ${source}` };
-  const target = codexSkillsDir(ctx.env.home);
-  try {
-    mkdirSync(target, { recursive: true });
-    for (const skill of readdirSync(source, { withFileTypes: true })) {
-      if (!skill.isDirectory()) continue;
-      const dest = join(target, skill.name);
-      rmSync(dest, { recursive: true, force: true });
-      cpSync(join(source, skill.name), dest, { recursive: true });
-    }
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
-  }
-  ctx.out(`Copied the trellis-crew skills into ${target}.`);
-  return { ok: true };
+  return exportSkills(codexSkillsDir(ctx.env.home), ctx.out);
 }
 
 /**
@@ -110,5 +91,9 @@ export const codexAdapter: Adapter = {
   async updatePlugin(ctx) {
     // The documented update is a fresh copy of the skill folders.
     return copySkills(ctx);
+  },
+
+  checkPlugin(env) {
+    return skillCheckReport(codexSkillsDir(env.home));
   },
 };

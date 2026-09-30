@@ -117,6 +117,7 @@ that you set and prints a warning that names the session and the field.
 - Codex CLI sessions start under one supervisor process. `start` returns
   at once. The supervisor starts each `codex exec` process and records
   its process ID. `stop` ends the supervisor and each session.
+  Install exports the skills for it, as the next section says.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.
@@ -127,6 +128,35 @@ By default, on every harness except Claude Code and Qwen Code, sessions
 talk through a file mailbox. The default folder is
 `~/.trellis-crew/mailbox`. Set `mailbox` in the roles file to use
 another folder. The value must not hold a `..` part.
+
+### The skills on Codex CLI
+
+Codex CLI reads your skills from `~/.agents/skills/`. On Codex CLI,
+`install` and `update` copy each approved skill there. The approved
+skills are the ones in the `skills` list of `.claude-plugin/plugin.json`.
+A folder under `skills/` that the list leaves out is not copied. The CLI
+never writes skills into your project folder, and it never sets
+`CODEX_HOME`.
+
+- Each copied folder holds a marker file, `.trellis-crew-skill.json`. It
+  names the skill and the SHA-256 hash of its source files. If the
+  marker names the same skill as the folder, the CLI owns that folder.
+  Any other folder is not the CLI's own.
+- A folder of your own with the name of an approved skill is left alone.
+  The install then stops, names the folder, and exits 1. It changes
+  nothing. Move or rename the folder, then run the command again.
+- The CLI replaces each folder it owns. If a skill is no longer
+  approved, the CLI removes the folder it owns for that skill. It
+  touches nothing else in `~/.agents/skills/`.
+- The CLI does not follow a symbolic link. A link in place of a skill
+  folder, `~/.agents`, or `~/.agents/skills` stops the install.
+
+`trellis-crew update --check` also compares each copy with the package.
+It prints one line for each skill: in step, drifted, missing, not owned,
+or stale. A drifted copy differs from the package. A stale folder is one
+the CLI owns for a skill that is no longer approved. A drifted, missing,
+or stale skill makes the check exit 1, and it names each one. The check
+changes nothing. Run `trellis-crew update` to copy the skills fresh.
 
 ### Exit codes
 

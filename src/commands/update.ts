@@ -64,6 +64,10 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
   const adapter = adapterFor(record.harness, deps.adapters);
   if (options.check) {
     deps.out('--check: nothing was changed.');
+    const check = adapter?.checkPlugin?.(deps.env);
+    for (const line of check?.lines ?? []) deps.out(line);
+    for (const line of check?.errors ?? []) deps.err(line);
+    if ((check?.errors.length ?? 0) > 0) complete = false;
   } else if (adapter?.updatePlugin === undefined) {
     deps.err(`The plugin update on ${name} is not built yet, so the plugin was not updated.`);
     complete = false;

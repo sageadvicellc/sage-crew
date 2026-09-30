@@ -126,21 +126,25 @@ describe('Codex CLI', () => {
     expect(team.ok && team.record?.sessions[0]?.pid).toBeNull();
   });
 
-  it('install copies each skill folder into ~/.agents/skills, and update copies them fresh', async () => {
+  it('install copies each approved skill folder into ~/.agents/skills with its marker, and update copies them fresh', async () => {
     const t = installedOn('codex', 'file-mailbox', { fetchLatest: async () => ({ status: 'not-published' }) });
     mkdirSync(join(t.env.home, '.codex'));
     expect(await main(['install', '--harness', 'codex'], t.deps)).toBe(0);
-    const skills = readdirSync(join(repoRoot, 'skills'));
+    const manifest = JSON.parse(readFileSync(join(repoRoot, '.claude-plugin', 'plugin.json'), 'utf8')) as { skills: string[] };
+    const skills = manifest.skills.map((entry) => entry.replace(/^\.\/skills\/|\/$/g, ''));
     const target = join(t.env.home, '.agents', 'skills');
-    expect(readdirSync(target).sort()).toEqual(skills.sort());
+    expect(readdirSync(target).sort()).toEqual([...skills].sort());
     for (const skill of skills) {
       expect(readFileSync(join(target, skill, 'SKILL.md'), 'utf8')).toBe(readFileSync(join(repoRoot, 'skills', skill, 'SKILL.md'), 'utf8'));
+      expect(JSON.parse(readFileSync(join(target, skill, '.trellis-crew-skill.json'), 'utf8'))).toMatchObject({ owner: 'trellis-crew', skill });
     }
     writeFileSync(join(target, 'department-lead', 'stale.txt'), 'old');
     writeFileSync(join(target, 'someone-elses-skill.md'), 'keep');
+    mkdirSync(join(target, 'someone-elses-folder'));
     expect(await main(['update'], t.deps)).toBe(0);
     expect(existsSync(join(target, 'department-lead', 'stale.txt'))).toBe(false);
     expect(existsSync(join(target, 'someone-elses-skill.md'))).toBe(true);
+    expect(existsSync(join(target, 'someone-elses-folder'))).toBe(true);
     expect(t.runner.calls).toEqual([]);
   });
 });
