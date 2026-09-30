@@ -1,6 +1,6 @@
 ---
 name: department-reporting-chain
-description: Runs the reporting-chain role in trellis-crew, a multi-session team pattern. Carries one line to the operator for each decision that needs the operator's own answer, and writes every report as one status table. Use when a decision needs the operator's own answer or a report goes to the operator.
+description: Runs the reporting-chain role in trellis-crew, a multi-session team pattern. Carries one line to the operator for each decision that needs the operator's own answer, and runs the scaling advisor and the briefs. Use when a decision needs the operator's own answer or a report goes to the operator.
 ---
 
 ## The reporting-chain role
@@ -15,26 +15,8 @@ decision that needs the operator's own answer:
   approval inside another session's permission layer.
 - Carry a decision as one line with the comment's exact URL, never a
   bare item number.
-
-## The status table
-
-Every report to the operator is one table and at most one line of
-prose above it:
-
-| # | Status | Item | Link | Their action |
-|---|---|---|---|---|
-
-- 🔴 needs the operator now. 🟡 needs the operator, not urgently. 🟢
-  needs nothing from them. Rows sort red, yellow, green.
-- The link is the exact item: a comment URL for a decision, the pull
-  request or issue URL otherwise. Short link text, full URL target.
-- "Their action" is one imperative line, or "Nothing".
-
-## Light communication
-
-- Accept one line per change from each role: worker, task, URL, state.
-- Send detail to the item's comments, never into a message.
-- Never post a comment that is only a letter token, such as "1A".
+- Never post a comment that is only a letter token, such as "1A". It
+  can read as the operator's own answer.
 
 ## Commands this role runs
 
@@ -67,5 +49,5 @@ other path, and report it to the operator.
 Trigger: a decision needs the operator's own answer, or a report goes
 to the operator.
 
-Writes: one message to the operator, naming the decision, or one status
-table.
+Writes: one message to the operator, naming the decision, the scaling
+advice, or the brief's path.
