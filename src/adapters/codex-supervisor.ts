@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processStartTime, startedOf } from '../runner.ts';
@@ -25,17 +25,36 @@ export interface SupervisorOptions {
   warn?: (line: string) => void;
 }
 
-// Merge note: open PR 24 adds the same `warn` option and defaultWarn to this
-// file. Keep one copy of each when the two merge.
+// Merge note: trellis-crew#24 adds its own `warn` option and `defaultWarn` to
+// this file. Keep one copy of each when the two merge, and keep this one's
+// no-follow open of codex-supervisor.log.
 
-/** The default report for a failed child. The CLI starts the supervisor with no terminal, so the log file keeps the line. */
+const LOG_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+
+/**
+ * The default report for a failed child. The CLI starts the supervisor with
+ * no terminal, so the log file keeps the line. The log is opened with no
+ * link followed. A refused or failed write is reported on standard error,
+ * and never ends the supervisor.
+ */
 function defaultWarn(teamPath: string): (line: string) => void {
+  const logPath = join(dirname(teamPath), 'codex-supervisor.log');
   return (line) => {
     process.stderr.write(`${line}\n`);
+    let fd: number | undefined;
     try {
-      appendFileSync(join(dirname(teamPath), 'codex-supervisor.log'), `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
-    } catch {
-      // Standard error still has the line.
+      fd = openSync(logPath, LOG_FLAGS, 0o600);
+      writeSync(fd, `${new Date().toISOString()} ${line}\n`);
+    } catch (error) {
+      process.stderr.write(`trellis-crew supervisor: could not write ${logPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // A failed close never ends the supervisor.
+        }
+      }
     }
   };
 }
@@ -102,6 +121,10 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
   const startAll = (): void => {
     for (const session of job.sessions) {
       if (stopping) break;
+      // Merge note: trellis-crew#24 checks `session.args` again here with codex-args.ts `execArgsProblem`.
+      // These args hold one `-c developer_instructions=...`. That check must allow exactly that one `-c`,
+      // compared against the value rebuilt fresh from the shipped skill for the session's role, and never
+      // `-c` in general. The full rule and the smuggle tests it needs are at codex.ts `codexExecArgs`.
       const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: process.env });
       let failed = false;
       child.once('error', (error) => {

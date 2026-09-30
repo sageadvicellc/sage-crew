@@ -29,7 +29,19 @@ export function supervisorScriptPath(): string {
 /**
  * The arguments for one `codex exec` session. Codex documents no flag to name a session, so the kickoff names it.
  * The role's instructions sit just before the prompt. Throws RoleInstructionsError when the role skill cannot be read.
- * Merge note: open PR 24 moves this function into codex-args.ts; carry the role instructions over there.
+ *
+ * Merge note: trellis-crew#24 moves this function to codex-args.ts `codexExecArgs`. Carry the role
+ * instructions over there.
+ *
+ * Reconciliation rule for that merge. trellis-crew#24's `refusedCodexFlag` refuses every launch flag,
+ * and codex-args.ts `execArgsProblem` checks the argv again in the supervisor. As written, both refuse
+ * the `-c` this function adds. The merge must allow exactly ONE `-c`, and only when its value starts
+ * with `developer_instructions="` and equals `'developer_instructions=' + tomlString(roleText)`,
+ * rebuilt fresh from the shipped skill for that session's role. `execArgsProblem` makes that
+ * comparison. It must NEVER allow `-c` in general, because `-c sandbox_mode=danger-full-access` is
+ * the risk. The merge adds these tests, each of which must be refused: a second `-c`; a `-c` whose key
+ * differs; a `-c developer_instructions` whose value differs from the rebuilt one; and a
+ * `developer_instructions` value that hides a newline plus `sandbox_mode=`.
  */
 export function codexExecArgs(flagArgs: readonly string[], kickoff: string, role: Role): string[] {
   return ['exec', ...flagArgs, ...roleInstructionsArgs(role), kickoff];
@@ -86,7 +98,9 @@ export const codexAdapter: Adapter = {
 
   async launchAll(items, ctx, teamPath) {
     // Every session's arguments are built before the job file is written, so a failed one starts no session.
-    // Merge note: open PR 24 has the same shape here; keep one copy of it when the two merge.
+    // Merge note: trellis-crew#24 gives codex.ts `launchAll` this same shape: build every session's args
+    // first, then write the job file inside a try. Keep one copy when the two merge. The `-c` these args
+    // hold follows the reconciliation rule at `codexExecArgs` above.
     const sessions: SupervisorJob['sessions'] = [];
     for (const item of items) {
       try {

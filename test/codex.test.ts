@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
@@ -134,6 +134,36 @@ describe('Codex CLI', () => {
       stderr.mockRestore();
     }
     expect(readFileSync(join(dir, 'codex-supervisor.log'), 'utf8')).toMatch(/^\S+ trellis-crew supervisor: main: could not start: .*ENOENT.*\n$/);
+  });
+
+  it('the default report follows no link at codex-supervisor.log, and the supervisor still ends cleanly', async () => {
+    const dir = makeFixtureHome();
+    const outside = join(makeFixtureHome(), 'outside.txt');
+    writeFileSync(outside, 'untouched\n');
+    symlinkSync(outside, join(dir, 'codex-supervisor.log'));
+    const teamPath = join(dir, 'team.json');
+    writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
+    const written: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      await runSupervisor(
+        { binary: join(dir, 'missing'), cwd: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
+        { ownPid: process.pid, pollMs: 10 },
+      ).done;
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(readFileSync(outside, 'utf8')).toBe('untouched\n');
+    // The refused write is reported as an error on standard error, after the line itself.
+    expect(written).toEqual([
+      expect.stringMatching(/^trellis-crew supervisor: main: could not start: .*ENOENT\n$/),
+      expect.stringMatching(/^trellis-crew supervisor: could not write .*codex-supervisor\.log: .*ELOOP.*\n$/),
+    ]);
+    const team = readTeamFile(teamPath);
+    expect(team.ok && team.record?.sessions[0]?.error).toMatch(/^could not start: .*ENOENT/);
   });
 
   it('status prints the error the supervisor recorded for a session', async () => {
