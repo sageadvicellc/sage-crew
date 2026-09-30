@@ -39,12 +39,14 @@ jobs:
       - run: npm run build
 
   # The sanitizer runs in its own job, and no code from the branch runs
-  # here. The sanitizer comes from the base commit: the pull request's base,
-  # or the default branch on a push. The branch is checked out only as
-  # data: git reads its files, its diffs, and its commit messages. A branch
-  # that changes the sanitizer or the sanitize script cannot change this
-  # check, and the deny-list secret never reaches a job that runs branch
-  # code.
+  # here. The sanitizer and its allowlist come from the base commit: the
+  # pull request's base, or the default branch on a push. The branch is
+  # checked out only as data: git reads its files, its diffs, and its
+  # commit messages. So a branch that changes the sanitizer, the sanitize
+  # script, or the allowlist does not change this check, and the deny-list
+  # secret never reaches a job that runs branch code. A branch can still
+  # change this workflow file itself. That change shows in the pull
+  # request's diff, where review sees it.
   sanitize:
     runs-on: ubuntu-latest
     steps:
@@ -89,5 +91,6 @@ jobs:
         env:
           SANITIZE_REQUIRE_DENYLIST: "1"
           SANITIZE_DENYLIST: ${{ runner.temp }}/denylist.txt
+          SANITIZE_ALLOWLIST: ${{ github.workspace }}/base/.sanitize-allow
           SANITIZE_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
         run: node "$GITHUB_WORKSPACE/base/src/sanitize/run.ts"

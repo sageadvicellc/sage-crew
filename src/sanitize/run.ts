@@ -20,6 +20,13 @@ export const REQUIRE_VAR = 'SANITIZE_REQUIRE_DENYLIST';
 export const RANGE_VAR = 'SANITIZE_RANGE';
 /** The committed allowlist of reviewed false positives, at the repository root. */
 export const ALLOWLIST_FILE = '.sanitize-allow';
+/**
+ * Names the allowlist file to use in place of the one in the scanned
+ * repository. CI points it at the base commit's allowlist, so a branch
+ * cannot clear its own findings. A named file that does not exist counts
+ * as an empty allowlist.
+ */
+export const ALLOWLIST_VAR = 'SANITIZE_ALLOWLIST';
 
 export type UnsetPolicy = 'fail' | 'warn';
 
@@ -289,8 +296,10 @@ function loadDenyList(opts: SanitizeOptions, root: string, failures: string[]): 
   return { list: parsed.list, selfPath };
 }
 
-function loadAllowlist(root: string, failures: string[]): AllowEntry[] {
-  const path = join(root, ALLOWLIST_FILE);
+function loadAllowlist(opts: SanitizeOptions, root: string, failures: string[]): AllowEntry[] {
+  const named = opts.vars[ALLOWLIST_VAR];
+  const path =
+    named === undefined || named === '' ? join(root, ALLOWLIST_FILE) : isAbsolute(named) ? named : resolve(opts.cwd, named);
   if (!existsSync(path)) return [];
   const parsed = parseAllowlist(readFileSync(path, 'utf8'));
   failures.push(...parsed.errors.map((e) => `${ALLOWLIST_FILE}: ${e}`));
@@ -342,7 +351,7 @@ export async function runSanitize(options: SanitizeOptions): Promise<number> {
   const findings: Finding[] = [];
 
   const deny = loadDenyList(opts, root, failures);
-  const allow = loadAllowlist(root, failures);
+  const allow = loadAllowlist(opts, root, failures);
 
   const listed = await git(['ls-files', '-z']);
   if (!listed.ok) failures.push('cannot list tracked files');

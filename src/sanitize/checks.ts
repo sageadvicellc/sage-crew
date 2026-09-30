@@ -128,13 +128,15 @@ const PATTERNS: readonly Pattern[] = [
     regex: /\b[\w-]+\.atlassian\.net\/(?:browse|jira)\/|\blinear\.app\/[\w-]+\/issue\//g,
   },
   // A Claude Code session link or id points at a private conversation.
-  { cls: 'session-link', detail: 'Claude session link', regex: /\bclaude\.ai\/code\/session/g },
+  { cls: 'session-link', detail: 'Claude session link', regex: /\bclaude\.ai\/code\/session/gi },
   {
     cls: 'session-link',
     detail: 'Claude session id',
-    // The id is `session_` and 24 or more letters and digits, so code
-    // names such as a `session_id` field do not match.
-    regex: /\bsession_[0-9A-Za-z]{24,}\b/g,
+    // The id is `session_` and 24 or more letters and digits, with at least
+    // one digit, so code names such as a `session_id` field or a long word
+    // do not match. A letter or digit may not touch either end, but an
+    // underscore before it may, as in a prefixed id.
+    regex: /(?<![0-9A-Za-z])session_(?=[A-Za-z]*[0-9])[0-9A-Za-z]{24,}(?![0-9A-Za-z])/gi,
   },
 ];
 

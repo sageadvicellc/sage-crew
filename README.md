@@ -242,6 +242,10 @@ stays red until the maintainer adds the secret.
 private-path, and ticket-link classes. Each line is `<path> <class>`. It
 never holds a deny-list allowance.
 
+The `SANITIZE_ALLOWLIST` variable names another allowlist file to use in
+its place. CI points it at the base commit's allowlist, so a pull request
+cannot clear its own findings. A new entry takes effect after it merges.
+
 ### The commit range
 
 `npm run sanitize -- --range <base>..<head>` scans the messages and the

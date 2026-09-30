@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import {
   parseAllowlist,
   parseDenyList,
@@ -64,6 +65,8 @@ const seeded: Array<[string, string, FindingClass]> = [
   ['a Claude session link', `see ${fake.sessionUrl}`, 'session-link'],
   ['a Claude session path with no scheme', `see ${fake.sessionPath}`, 'session-link'],
   ['a bare Claude session id', `resume ${fake.sessionId} later`, 'session-link'],
+  ['a session link in capitals', `see ${fake.sessionUrl.toUpperCase()}`, 'session-link'],
+  ['a session id with a prefix', `id cse_${fake.sessionId}`, 'session-link'],
 ];
 
 const clean = [
@@ -77,6 +80,7 @@ const clean = [
   `A longer word that only contains the term: ${TERM}s and pre${TERM}`,
   'A funding link https://github.com/sponsors/example is not a ticket.',
   'Names such as session_id, session_token, and session_2 are code, not session ids.',
+  'A long name such as session_initializationparameters has no digit, so it is not an id.',
   'The page https://claude.ai/code is not a session link.',
 ];
 
@@ -749,6 +753,47 @@ describe('sanitize run', () => {
     expect(run.stderr).toMatch(/private-path: notes\.md:1/);
   });
 
+  it('a named allowlist replaces the one in the scanned repository', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('notes.md', `see ${fake.macHome}/notes\n`);
+    repo.write('.sanitize-allow', 'notes.md private-path\n');
+    repo.commit('chore: start');
+    // The repository's own allowlist clears the finding.
+    const own = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(own.code).toBe(0);
+    // A named allowlist that lacks the entry, as the base commit's would,
+    // leaves the finding in place.
+    const base = join(repo.root, '..', `base-allow-${Date.now()}`);
+    writeFileSync(base, '# no entries\n');
+    const named = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile(), SANITIZE_ALLOWLIST: base }, 'HEAD');
+    rmSync(base);
+    expect(named.code).toBe(1);
+    expect(named.err).toMatch(/private-path: notes\.md:1/);
+    // A named allowlist that does not exist counts as empty.
+    const missing = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile(), SANITIZE_ALLOWLIST: `${base}-missing` }, 'HEAD');
+    expect(missing.code).toBe(1);
+  });
+
+  it('CI runs the base sanitizer on the branch as data, and only there holds the secret', () => {
+    const workflow = parseYaml(readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8')) as {
+      jobs: Record<string, { steps: Array<Record<string, unknown>> }>;
+    };
+    const gates = JSON.stringify(workflow.jobs['gates']);
+    expect(gates).not.toContain('secrets.');
+    expect(gates).not.toContain('sanitize');
+    const steps = workflow.jobs['sanitize']?.steps ?? [];
+    const checkouts = steps.filter((s) => String(s['uses'] ?? '').startsWith('actions/checkout@'));
+    expect(checkouts.map((s) => (s['with'] as Record<string, unknown>)['path'])).toEqual(['base', 'head']);
+    for (const s of checkouts) expect((s['with'] as Record<string, unknown>)['persist-credentials']).toBe(false);
+    for (const s of steps) expect(String(s['run'] ?? ''), 'no npm in the sanitize job').not.toMatch(/\bnpm\b/);
+    const run = steps.find((s) => String(s['run'] ?? '').includes('sanitize/run.ts'));
+    expect(run?.['run']).toBe('node "$GITHUB_WORKSPACE/base/src/sanitize/run.ts"');
+    expect(run?.['working-directory']).toBe('head');
+    const env = run?.['env'] as Record<string, string>;
+    expect(env['SANITIZE_REQUIRE_DENYLIST']).toBe('1');
+    expect(env['SANITIZE_ALLOWLIST']).toMatch(/\/base\/\.sanitize-allow$/);
+  });
+
   it('the sanitizer imports only node built-ins and its own files, so CI installs nothing to run it', () => {
     const seen = new Set<string>();
     const queue = [join(repoRoot, 'src', 'sanitize', 'run.ts')];
@@ -757,6 +802,8 @@ describe('sanitize run', () => {
       if (seen.has(file)) continue;
       seen.add(file);
       const text = readFileSync(file, 'utf8');
+      // A dynamic import or a require could load a package too.
+      expect(text, `${file} loads a module at run time`).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
       for (const [, spec] of text.matchAll(/^\s*(?:import|export)\b[^'"]*?from\s+['"]([^'"]+)['"]/gm)) {
         if ((spec as string).startsWith('node:')) continue;
         expect(spec, `${file} imports ${spec}`).toMatch(/^\.\.?\//);
