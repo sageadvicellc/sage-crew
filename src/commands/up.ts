@@ -7,6 +7,7 @@ import { mailboxPath } from '../mailbox/folder.ts';
 import { EXIT_OK, EXIT_USAGE, type CliDeps } from '../deps.ts';
 import { HARNESSES } from '../detect/probe.ts';
 import { printable } from '../printable.ts';
+import { API_KEY_WARNING, hasApiKey } from '../sign-in.ts';
 import { loadTeam, loadTeamText, type LoadResult } from '../roles/load.ts';
 import { runInstall, type InstallHints, type InstallOptions } from './install.ts';
 import { harnessMismatch, runStart } from './start.ts';
@@ -140,6 +141,9 @@ function displayName(harness: UpHarness): string {
  * fails, names that step, and exits with that step's code.
  */
 export async function runUp(options: UpOptions, deps: CliDeps): Promise<number> {
+  // Claude Code runs on an API key. The warning never blocks and never changes the exit code.
+  // Codex CLI has its own sign-in, so it gets no warning.
+  if (options.harness === 'claude-code' && !hasApiKey(deps.env)) deps.err(API_KEY_WARNING);
   // Codex sessions can write their working folder, so it is checked before anything else.
   if (options.harness === 'codex') {
     const workdir = await checkWorkdir(deps.env, deps.runner);
