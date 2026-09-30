@@ -28,19 +28,28 @@ export interface RecordingRunner extends Runner {
 
 const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
 
+/** The git calls the working-folder check makes. The recording runner answers only these. */
+const ANSWERED_GIT = [
+  ['rev-parse', '--show-toplevel'],
+  ['config', '--get', 'core.hooksPath'],
+];
+
 /**
- * Answers `git rev-parse` with the real git in the call's folder, so the
- * working-folder check reads a real temp repository. Git is not a harness,
- * so this runs no agent session. Every other git call is refused.
+ * Answers the working-folder check's git calls with the real git in the
+ * call's folder, so the check reads a real temp repository, with git's own
+ * exit code. Git is not a harness, so this runs no agent session. Every
+ * other git call is refused.
  */
 function realGit(args: readonly string[], options: RunOptions | undefined): RunResult {
-  if (args[0] !== 'rev-parse') return { code: 1, stdout: '', stderr: 'fixture: only git rev-parse is answered\n', timedOut: false };
+  if (!ANSWERED_GIT.some((known) => known.length === args.length && known.every((arg, i) => arg === args[i]))) {
+    return { code: 2, stdout: '', stderr: 'fixture: this git call is not answered\n', timedOut: false };
+  }
   try {
     const stdout = execFileSync('git', [...args], { cwd: options?.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     return { code: 0, stdout, stderr: '', timedOut: false };
   } catch (error) {
-    const stderr = String((error as { stderr?: unknown }).stderr ?? '');
-    return { code: 1, stdout: '', stderr, timedOut: false };
+    const failed = error as { status?: unknown; stderr?: unknown };
+    return { code: typeof failed.status === 'number' ? failed.status : 1, stdout: '', stderr: String(failed.stderr ?? ''), timedOut: false };
   }
 }
 

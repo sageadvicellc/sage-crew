@@ -207,7 +207,11 @@ The sandbox lets each session write its working folder. So the CLI
 starts Codex CLI sessions only at the top of a git worktree. The CLI
 runs `git rev-parse --show-toplevel` in the current folder. The answer
 must be that same folder, after both paths resolve through any links.
-The CLI also refuses your home folder and `/`. The folder is checked
+The CLI also refuses your home folder and `/`. It refuses a folder that
+holds another git repository one to three levels below it. It follows
+no symbolic link during that search. It refuses a folder whose
+`core.hooksPath` points inside it, because a session can write a git
+hook there. The folder's own `.git` is allowed. The folder is checked
 three times:
 
 - before `up` installs anything

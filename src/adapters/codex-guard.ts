@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { readdirSync, realpathSync, type Dirent } from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { findBinary } from '../detect/probe.ts';
 import { stateDir, type Env } from '../env.ts';
 import { printable } from '../printable.ts';
@@ -17,7 +17,19 @@ import type { Runner } from '../runner.ts';
 const WORKDIR_RULE = 'Codex CLI sessions can write their working folder, so trellis-crew starts them only at the top of a git worktree.';
 const GIT_TIMEOUT_MS = 10_000;
 
-type GitTop = { ok: true; top: string } | { ok: false; reason: string };
+/** The git calls the check makes, in the working folder. */
+const GIT_TOP = ['rev-parse', '--show-toplevel'];
+const GIT_HOOKS = ['config', '--get', 'core.hooksPath'];
+
+/** One git answer: the exit code, or null when git could not run, with its output. */
+interface GitAnswer {
+  code: number | null;
+  stdout: string;
+  /** The first line of standard error, or why git could not run. */
+  reason: string;
+}
+
+type Git = (args: readonly string[]) => GitAnswer;
 
 function real(path: string): string | undefined {
   try {
@@ -27,16 +39,83 @@ function real(path: string): string | undefined {
   }
 }
 
-/** Judges a working folder from git's answer. Both sides are compared after realpath. */
-function workdirProblem(folder: string, home: string, git: () => GitTop): string | undefined {
+/**
+ * Judges a working folder. It must be the top of a git worktree, compared
+ * after realpath, and not `/` or the home folder. It must hold no other
+ * repository at depth 1 to 3, and its git hooks folder must not sit inside
+ * it. The folder's own `.git` is allowed: Codex keeps it read-only.
+ */
+function workdirProblem(folder: string, home: string, git: Git): string | undefined {
   const why = (reason: string) => `${WORKDIR_RULE} ${printable(folder)}: ${reason}.`;
   const realFolder = real(folder);
   if (realFolder === undefined) return why('the folder cannot be read');
   if (realFolder === sep) return why('it is the root folder');
   if (realFolder === (real(home) ?? resolve(home))) return why('it is your home folder');
-  const top = git();
-  if (!top.ok) return why(`it is not in a git worktree (${top.reason})`);
-  if (real(top.top) !== realFolder) return why(`it is not the top of a git worktree. The top is ${printable(top.top)}`);
+  const top = git(GIT_TOP);
+  if (top.code !== 0) return why(`it is not in a git worktree (${top.reason || `git exited with code ${String(top.code)}`})`);
+  const topPath = firstLine(top.stdout);
+  if (real(topPath) !== realFolder) return why(`it is not the top of a git worktree. The top is ${printable(topPath)}`);
+  const nested = nestedRepoProblem(realFolder) ?? hooksPathProblem(realFolder, home, git(GIT_HOOKS));
+  return nested === undefined ? undefined : why(nested);
+}
+
+/**
+ * Refuses a git hooks folder inside the working folder, since a session
+ * could write a hook there that git later runs. The value resolves as git
+ * resolves it: an absolute path as it is, a leading `~/` against the home
+ * folder, and any other path against the worktree top. Then the realpath
+ * of its deepest existing parent is taken. Exit code 1 means the value is
+ * unset, which passes. Any other failure refuses, so the check fails
+ * closed. A `~user` form cannot be resolved here, so it refuses too.
+ */
+function hooksPathProblem(top: string, home: string, answer: GitAnswer): string | undefined {
+  if (answer.code === 1) return undefined;
+  if (answer.code !== 0) {
+    return `git config --get core.hooksPath failed, so the hooks folder cannot be checked (${answer.reason || `exit code ${String(answer.code)}`})`;
+  }
+  const value = answer.stdout.replace(/\n$/, '');
+  let path: string;
+  if (value === '~' || value.startsWith('~/')) path = join(home, value.slice(1));
+  else if (value.startsWith('~')) return `core.hooksPath is ${printable(value)}, which names another user's home folder, so it cannot be checked`;
+  else path = isAbsolute(value) ? value : resolve(top, value);
+  const resolved = realOfExisting(path);
+  if (resolved !== top && !within(resolved, top)) return undefined;
+  return `core.hooksPath is ${printable(value)}, which resolves to ${printable(resolved)}, inside the working folder, so a session could write a git hook`;
+}
+
+/** How deep below the working folder the scan for other repositories looks. */
+const NESTED_DEPTH = 3;
+
+/**
+ * Looks for another git repository below a worktree top, breadth first,
+ * at depth 1 to NESTED_DEPTH. A folder that holds a `.git` entry of any
+ * kind, a folder or a gitfile, counts. The top's own `.git` is not
+ * entered. A symbolic link is never followed. A folder that cannot be
+ * read is refused, so the scan fails closed. Returns the reason, which
+ * names the first path found relative to the top, or undefined.
+ */
+function nestedRepoProblem(top: string): string | undefined {
+  let level = [''];
+  for (let depth = 0; depth <= NESTED_DEPTH && level.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const rel of level) {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(join(top, rel), { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      } catch (error) {
+        const code = error instanceof Error && 'code' in error ? String(error.code) : 'unreadable';
+        return `a folder below it cannot be read, so it cannot be checked for other git repositories: ${printable(rel || '.')} (${code})`;
+      }
+      if (depth > 0 && entries.some((entry) => entry.name === '.git')) return `it holds another git repository at ${printable(rel)}`;
+      if (depth === NESTED_DEPTH) continue;
+      for (const entry of entries) {
+        // A Dirent from readdir describes the entry itself, so a link is never a directory here.
+        if (!entry.isDirectory() || (depth === 0 && entry.name === '.git')) continue;
+        next.push(rel === '' ? entry.name : join(rel, entry.name));
+      }
+    }
+    level = next;
+  }
   return undefined;
 }
 
@@ -45,38 +124,37 @@ function firstLine(text: string): string {
 }
 
 /**
- * Checks the Env's current folder through the injected runner: `git
- * rev-parse --show-toplevel`, run in that folder, must name that same
- * folder. Git is looked up on the Env's PATH, as every binary is. Returns
- * the reason the folder is refused, or undefined.
+ * Checks the Env's current folder through the injected runner. Git is
+ * looked up on the Env's PATH, as every binary is. Both git calls run
+ * first, in that folder, and then the one judge reads their answers.
+ * Returns the reason the folder is refused, or undefined.
  */
 export async function checkWorkdir(env: Env, runner: Runner): Promise<string | undefined> {
-  const git = findBinary('git', env.path);
-  let answer: GitTop = { ok: false, reason: 'git is not on PATH' };
-  if (git !== undefined) {
-    const result = await runner.run(git, ['rev-parse', '--show-toplevel'], { cwd: env.cwd, env: env.vars, timeoutMs: GIT_TIMEOUT_MS });
-    answer =
-      result.code === 0 && !result.timedOut
-        ? { ok: true, top: firstLine(result.stdout) }
-        : { ok: false, reason: result.timedOut ? 'git did not answer in time' : firstLine(result.stderr) || `git exited with code ${String(result.code)}` };
+  const binary = findBinary('git', env.path);
+  const answers = new Map<string, GitAnswer>();
+  for (const args of [GIT_TOP, GIT_HOOKS]) {
+    let answer: GitAnswer = { code: null, stdout: '', reason: 'git is not on PATH' };
+    if (binary !== undefined) {
+      const result = await runner.run(binary, args, { cwd: env.cwd, env: env.vars, timeoutMs: GIT_TIMEOUT_MS });
+      answer = result.timedOut
+        ? { code: null, stdout: '', reason: 'git did not answer in time' }
+        : { code: result.code, stdout: result.stdout, reason: result.error ?? firstLine(result.stderr) };
+    }
+    answers.set(args.join(' '), answer);
   }
-  return workdirProblem(env.cwd, env.home, () => answer);
+  return workdirProblem(env.cwd, env.home, (args) => answers.get(args.join(' ')) as GitAnswer);
 }
 
 /** The same check for the supervisor, which has no runner. It runs git with an argument list and no shell. */
 export function checkWorkdirSync(folder: string, home: string): string | undefined {
-  return workdirProblem(folder, home, () => {
+  return workdirProblem(folder, home, (args) => {
     try {
-      const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-        cwd: folder,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: GIT_TIMEOUT_MS,
-      });
-      return { ok: true, top: firstLine(out) };
+      const stdout = execFileSync('git', [...args], { cwd: folder, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_TIMEOUT_MS });
+      return { code: 0, stdout, reason: '' };
     } catch (error) {
-      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
-      return { ok: false, reason: firstLine(stderr) || (error instanceof Error ? error.message : String(error)) };
+      const failed = error as { status?: unknown; stderr?: unknown };
+      const reason = firstLine(String(failed.stderr ?? '')) || (error instanceof Error ? error.message : String(error));
+      return { code: typeof failed.status === 'number' ? failed.status : null, stdout: '', reason };
     }
   });
 }

@@ -1,5 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { codexAdapter } from '../src/adapters/codex.ts';
 import { codexExecArgs } from '../src/adapters/codex-args.ts';
@@ -69,7 +70,10 @@ describe('the Codex working folder: checkWorkdir through the injected runner', (
     const env = makeTestEnv({ cwd: repo.root });
     const runner = recordingRunner();
     expect(await checkWorkdir(env, runner)).toBeUndefined();
-    expect(runner.calls).toEqual([{ kind: 'run', command: join(fixtureBin, 'git'), args: ['rev-parse', '--show-toplevel'] }]);
+    expect(runner.calls).toEqual([
+      { kind: 'run', command: join(fixtureBin, 'git'), args: ['rev-parse', '--show-toplevel'] },
+      { kind: 'run', command: join(fixtureBin, 'git'), args: ['config', '--get', 'core.hooksPath'] },
+    ]);
   });
 
   it('refuses when git is not on PATH', async () => {
@@ -171,6 +175,180 @@ describe('the Codex working folder: the supervisor refuses before it starts any 
     const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10 });
     await handle.done;
     expect(readFileSync(join(dirname(teamPath), 'codex-supervisor.log'), 'utf8')).toMatch(/refused to start any session: .*it is your home folder\./);
+  });
+});
+
+describe('the Codex working folder holds no other git repository, at depth 1 to 3', () => {
+  /** A repo top with one more repository made at `inner`, a path relative to the top. */
+  function nestedAt(inner: string) {
+    const repo = makeFixtureRepo();
+    mkdirSync(join(repo.root, dirname(inner)), { recursive: true });
+    repo.git('init', '-q', inner);
+    return repo;
+  }
+
+  const both = async (cwd: string): Promise<[string | undefined, string | undefined]> => [
+    await checkWorkdir(makeTestEnv({ cwd }), recordingRunner()),
+    checkWorkdirSync(cwd, makeFixtureHome()),
+  ];
+
+  it('refuses a nested clone at depth 1 and at depth 3, and names it', async () => {
+    for (const [inner, shown] of [['inner', 'inner'], [join('a', 'b', 'inner'), join('a', 'b', 'inner')]]) {
+      const repo = nestedAt(inner as string);
+      for (const problem of await both(repo.root)) {
+        expect(problem).toMatch(new RegExp(`^${RULE.replace(/[.]/g, '\\.')} .*: it holds another git repository at ${shown}\\.$`));
+      }
+    }
+  });
+
+  it('passes a nested clone at depth 4, which is past the bound', async () => {
+    const repo = nestedAt(join('a', 'b', 'c', 'inner'));
+    expect(await both(repo.root)).toEqual([undefined, undefined]);
+  });
+
+  it('refuses a .git file at depth 2, as a worktree or submodule leaves one', async () => {
+    const repo = makeFixtureRepo();
+    repo.write(join('a', 'sub', '.git'), 'gitdir: ../../elsewhere\n');
+    for (const problem of await both(repo.root)) expect(problem).toMatch(/: it holds another git repository at a\/sub\.$/);
+  });
+
+  it('never follows a symbolic link, so a link to a repository passes', async () => {
+    const repo = makeFixtureRepo();
+    const other = makeFixtureRepo();
+    symlinkSync(other.root, join(repo.root, 'linked'));
+    symlinkSync(join(other.root, '.git'), join(repo.root, 'dot-git-link'));
+    expect(await both(repo.root)).toEqual([undefined, undefined]);
+  });
+
+  it('passes a clean worktree top, and does not look inside its own .git', async () => {
+    const repo = makeFixtureRepo();
+    repo.write(join('src', 'deep', 'er', 'file.txt'), 'x');
+    repo.commit('one');
+    expect(await both(repo.root)).toEqual([undefined, undefined]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('refuses a folder below the top that cannot be read, and names it', async () => {
+    const repo = makeFixtureRepo();
+    mkdirSync(join(repo.root, 'open', 'locked'), { recursive: true });
+    chmodSync(join(repo.root, 'open', 'locked'), 0o000);
+    try {
+      for (const problem of await both(repo.root)) {
+        expect(problem).toMatch(/: a folder below it cannot be read, so it cannot be checked for other git repositories: open\/locked \(EACCES\)\.$/);
+      }
+    } finally {
+      chmodSync(join(repo.root, 'open', 'locked'), 0o755);
+    }
+  });
+
+  it('every place refuses it: up, launchAll before the job write, launch, and the supervisor', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    mkdirSync(join(t.env.cwd, 'vendor'));
+    execFileSync('git', ['init', '-q', join(t.env.cwd, 'vendor', 'lib')]);
+    const reason = /: it holds another git repository at vendor\/lib\./;
+
+    expect(await main(['up', '--harness', 'codex', '--yes'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(reason);
+    expect(t.out.text()).not.toContain('Step 1 of 2');
+
+    const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
+    const all = ctxFor(t.env, mailbox);
+    expect(await codexAdapter.launchAll?.([{ name: 'main', kickoff: 'k', flagArgs: [] }], all, join(t.env.home, 'team.json'))).toEqual({
+      ok: false,
+      message: expect.stringMatching(reason),
+    });
+    expect(existsSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json'))).toBe(false);
+    const one = ctxFor(t.env, mailbox);
+    expect(await codexAdapter.launch('main', 'k', [], one)).toEqual({ ok: false, message: expect.stringMatching(reason) });
+    expect([...all.runner.calls, ...one.runner.calls].filter((c) => !isGitCall(c))).toEqual([]);
+
+    const { job, teamPath } = supervisorRig(t.env.cwd, t.env.home);
+    const warnings: string[] = [];
+    await runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: (line) => warnings.push(line) }).done;
+    expect(warnings).toEqual([expect.stringMatching(reason)]);
+    expect(readTeamFile(teamPath)).toMatchObject({ ok: true, record: { sessions: [{ pid: null }] } });
+  });
+});
+
+describe('the Codex working folder does not hold its own git hooks folder', () => {
+  const both = async (cwd: string, home = makeFixtureHome()): Promise<[string | undefined, string | undefined]> => [
+    await checkWorkdir(makeTestEnv({ cwd, home }), recordingRunner()),
+    checkWorkdirSync(cwd, home),
+  ];
+  const inside = /: core\.hooksPath is .*, which resolves to .*, inside the working folder, so a session could write a git hook\.$/;
+
+  it('passes an unset core.hooksPath, and the folder keeps its own .git', async () => {
+    const repo = makeFixtureRepo();
+    expect(existsSync(join(repo.root, '.git'))).toBe(true);
+    expect(await both(repo.root)).toEqual([undefined, undefined]);
+  });
+
+  it('refuses a relative .githooks inside the repo', async () => {
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.hooksPath', '.githooks');
+    mkdirSync(join(repo.root, '.githooks'));
+    for (const problem of await both(repo.root)) {
+      expect(problem).toMatch(inside);
+      expect(problem).toContain('core.hooksPath is .githooks');
+    }
+  });
+
+  it('refuses an absolute path inside the repo', async () => {
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.hooksPath', join(repo.root, 'tools', 'hooks'));
+    mkdirSync(join(repo.root, 'tools', 'hooks'), { recursive: true });
+    for (const problem of await both(repo.root)) expect(problem).toMatch(inside);
+  });
+
+  it('refuses a path that does not exist yet but would sit inside the repo', async () => {
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.hooksPath', join('not', 'yet', 'hooks'));
+    for (const problem of await both(repo.root)) expect(problem).toMatch(inside);
+  });
+
+  it('resolves a leading ~/ against the home folder', async () => {
+    const repo = makeFixtureRepo();
+    const home = dirname(repo.root);
+    repo.git('config', 'core.hooksPath', `~/${basename(repo.root)}/hooks`);
+    for (const problem of await both(repo.root, home)) expect(problem).toMatch(inside);
+  });
+
+  it('passes a path outside the repo', async () => {
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.hooksPath', join(makeFixtureHome(), 'hooks'));
+    expect(await both(repo.root)).toEqual([undefined, undefined]);
+  });
+
+  it('refuses when git config fails in any way other than an unset value', async () => {
+    const repo = makeFixtureRepo();
+    const runner = recordingRunner();
+    const answer = runner.run.bind(runner);
+    runner.run = async (command, args, options) =>
+      args[0] === 'config' ? { code: 128, stdout: '', stderr: 'fatal: bad config line 1\n', timedOut: false } : answer(command, args, options);
+    expect(await checkWorkdir(makeTestEnv({ cwd: repo.root }), runner)).toMatch(
+      /: git config --get core\.hooksPath failed, so the hooks folder cannot be checked \(fatal: bad config line 1\)\.$/,
+    );
+  });
+
+  it('every place refuses it: up, launchAll before the job write, launch, and the supervisor', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: t.env.cwd });
+    expect(await main(['up', '--harness', 'codex', '--yes'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(/core\.hooksPath is \.githooks/);
+    expect(t.out.text()).not.toContain('Step 1 of 2');
+
+    const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
+    const all = ctxFor(t.env, mailbox);
+    expect(await codexAdapter.launchAll?.([{ name: 'main', kickoff: 'k', flagArgs: [] }], all, join(t.env.home, 'team.json'))).toEqual({
+      ok: false,
+      message: expect.stringMatching(inside),
+    });
+    expect(existsSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json'))).toBe(false);
+    expect(await codexAdapter.launch('main', 'k', [], ctxFor(t.env, mailbox))).toEqual({ ok: false, message: expect.stringMatching(inside) });
+
+    const { job } = supervisorRig(t.env.cwd, t.env.home);
+    const warnings: string[] = [];
+    await runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: (line) => warnings.push(line) }).done;
+    expect(warnings).toEqual([expect.stringMatching(inside)]);
   });
 });
 

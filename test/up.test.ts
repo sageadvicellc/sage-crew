@@ -224,10 +224,11 @@ describe('up --harness codex', () => {
     expect(readdirSync(join(t.env.home, '.agents', 'skills')).sort()).toEqual(readdirSync(join(repoRoot, 'skills')).sort());
     // No probe runs, because --harness names the harness, and no codex process runs in a test.
     // The only runs are the working-folder checks: once before step 1, and once before the supervisor starts.
-    expect(t.runner.calls.filter((c) => c.kind === 'run').map((c) => c.args)).toEqual([
+    const check = [
       ['rev-parse', '--show-toplevel'],
-      ['rev-parse', '--show-toplevel'],
-    ]);
+      ['config', '--get', 'core.hooksPath'],
+    ];
+    expect(t.runner.calls.filter((c) => c.kind === 'run').map((c) => c.args)).toEqual([...check, ...check]);
     const job = supervisorJob(t);
     expect(job.binary).toBe(join(fixtureBin, 'codex'));
     expect(job.sessions).toHaveLength(6);
