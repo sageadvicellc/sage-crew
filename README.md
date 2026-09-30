@@ -218,6 +218,9 @@ starts Codex CLI sessions only at the top of a git worktree. The CLI
 runs `git rev-parse --show-toplevel` in the current folder. The answer
 must be that same folder, after both paths resolve through any links.
 The CLI also refuses your home folder and `/`. It refuses a folder that
+is, or holds, this package's `skills` folder. With an `npm link`
+install, that folder is in the trellis-crew checkout. A session there
+can change the role text that each later start sends. It refuses a folder that
 holds another git repository one to three levels below it. It follows
 no symbolic link during that search. It refuses a folder whose
 `core.hooksPath` points inside it, because a session can write a git
