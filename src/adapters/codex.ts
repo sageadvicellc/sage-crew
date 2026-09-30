@@ -11,6 +11,10 @@ import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
 export { packageSkillsDir };
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** The folder Codex CLI reads user skills from. */
 export function codexSkillsDir(home: string): string {
   return join(home, '.agents', 'skills');
@@ -81,17 +85,25 @@ export const codexAdapter: Adapter = {
   },
 
   async launchAll(items, ctx, teamPath) {
-    let sessions: SupervisorJob['sessions'];
-    try {
-      sessions = items.map((item) => ({ name: item.name, args: codexExecArgs(item.flagArgs, item.kickoff, item.role) }));
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    // Every session's arguments are built before the job file is written, so a failed one starts no session.
+    // Merge note: open PR 24 has the same shape here; keep one copy of it when the two merge.
+    const sessions: SupervisorJob['sessions'] = [];
+    for (const item of items) {
+      try {
+        sessions.push({ name: item.name, args: codexExecArgs(item.flagArgs, item.kickoff, item.role) });
+      } catch (error) {
+        return { ok: false, notStarted: true, message: `${item.name}: ${errorMessage(error)}` };
+      }
     }
+    ctx.out('Role text: each Codex session gets the shipped default skill for its role. Each kickoff still comes from the roles file, or from the default team.');
     const job: SupervisorJob = { binary: ctx.binaryPath, cwd: ctx.env.cwd, teamPath, sessions };
-    const dir = stateDir(ctx.env);
-    ensurePrivateFolder(dir);
-    const jobPath = join(dir, 'codex-supervisor.json');
-    writeFileAtomic(jobPath, `${JSON.stringify(job, null, 2)}\n`, 0o600);
+    const jobPath = join(stateDir(ctx.env), 'codex-supervisor.json');
+    try {
+      ensurePrivateFolder(stateDir(ctx.env));
+      writeFileAtomic(jobPath, `${JSON.stringify(job, null, 2)}\n`, 0o600);
+    } catch (error) {
+      return { ok: false, message: `could not write the supervisor job file ${jobPath}: ${errorMessage(error)}` };
+    }
     try {
       const { pid } = await ctx.runner.spawnDetached(process.execPath, [supervisorScriptPath(), jobPath], {
         env: ctx.env.vars,

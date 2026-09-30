@@ -238,7 +238,7 @@ async function launchSupervised(config: RolesConfig, plan: LaunchPlan, record: T
   };
   if (!outcome.ok) {
     rmSync(teamJsonPath(deps.env), { force: true });
-    deps.err(`The supervisor could not start: ${outcome.message}`);
+    deps.err(outcome.notStarted ? `Nothing was started: ${outcome.message}` : `The supervisor could not start: ${outcome.message}`);
     return EXIT_RUNTIME;
   }
   record.supervisor_pid = outcome.supervisorPid;

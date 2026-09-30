@@ -25,7 +25,11 @@ describe('Codex CLI with a skill file missing', () => {
     state.skillsDir = makeFixtureHome();
     const t = installedOn('codex', 'file-mailbox');
     expect(await main(['start'], t.deps)).toBe(EXIT_RUNTIME);
-    expect(t.err.text()).toMatch(/could not start: role instructions for [a-z-]+: .*SKILL\.md: the file does not exist/);
+    expect(t.err.lines).toContainEqual(
+      expect.stringMatching(/^Nothing was started: [a-z0-9-]+: role instructions for [a-z-]+: .*SKILL\.md: the file does not exist$/),
+    );
+    // A skill that cannot be read is not a supervisor failure, so it is not worded as one.
+    expect(t.err.text()).not.toMatch(/supervisor could not start/);
     expect(t.runner.calls).toEqual([]);
     expect(existsSync(teamJsonPath(t.env))).toBe(false);
   });

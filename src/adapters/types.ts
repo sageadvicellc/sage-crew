@@ -61,4 +61,8 @@ export interface LaunchItem {
   flagArgs: readonly string[];
 }
 
-export type SupervisorOutcome = { ok: true; supervisorPid: number } | { ok: false; message: string };
+/**
+ * `notStarted` marks a failure found before the supervisor was started,
+ * such as a role skill that cannot be read. It is not a supervisor failure.
+ */
+export type SupervisorOutcome = { ok: true; supervisorPid: number } | { ok: false; message: string; notStarted?: true };

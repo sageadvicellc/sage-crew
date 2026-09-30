@@ -1,10 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
 import { main } from '../src/cli.ts';
 import { processStartTime } from '../src/runner.ts';
-import { readTeam, readTeamFile, writeTeamFile } from '../src/store/team-json.ts';
+import { readTeam, readTeamFile, teamJsonPath, writeTeam, writeTeamFile } from '../src/store/team-json.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { fixtureBin, repoRoot } from './helpers/paths.ts';
 import { SMALL_TEAM } from './helpers/roles.ts';
@@ -60,10 +60,95 @@ describe('Codex CLI', () => {
     if (launchAll === undefined) throw new Error('no launchAll');
     chmodSync(join(t.env.home, '.trellis-crew'), 0o755);
     const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {} };
-    await expect(launchAll([{ name: 'main', role: 'lead', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'))).rejects.toThrow(
-      /open to other users/,
-    );
+    const outcome = await launchAll([{ name: 'main', role: 'lead', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'));
+    expect(outcome).toEqual({ ok: false, message: expect.stringMatching(/^could not write the supervisor job file .*: .*open to other users/) });
     expect(t.runner.calls).toEqual([]);
+  });
+
+  it('start leaves no team record when the supervisor job file cannot be written', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    // A folder where the job file goes, so the atomic rename over it fails.
+    mkdirSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json', 'blocker'), { recursive: true });
+    expect(await main(['start'], t.deps)).toBe(1);
+    expect(t.err.text()).toMatch(/The supervisor could not start: could not write the supervisor job file/);
+    expect(existsSync(teamJsonPath(t.env))).toBe(false);
+    expect(t.runner.calls).toEqual([]);
+  });
+
+  it('the supervisor records a child that fails to spawn, in its log and on the team entry', async () => {
+    const dir = makeFixtureHome();
+    const teamPath = join(dir, 'team.json');
+    writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
+    const lines: string[] = [];
+    const handle = runSupervisor(
+      { binary: join(dir, 'missing'), cwd: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
+      { ownPid: process.pid, pollMs: 10, warn: (line) => lines.push(line) },
+    );
+    await handle.done;
+    expect(lines).toEqual([expect.stringMatching(/^trellis-crew supervisor: main: could not start: .*ENOENT/)]);
+    const team = readTeamFile(teamPath);
+    expect(team.ok && team.record?.sessions[0]?.error).toMatch(/^could not start: .*ENOENT/);
+  });
+
+  it('the supervisor records a child that exits non-zero, and not one that exits 0', async () => {
+    const dir = makeFixtureHome();
+    const fails = join(dir, 'fails');
+    writeFileSync(fails, '#!/bin/sh\nexit 3\n');
+    chmodSync(fails, 0o755);
+    const teamPath = join(dir, 'team.json');
+    writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
+    const lines: string[] = [];
+    await runSupervisor(
+      { binary: fails, cwd: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
+      { ownPid: process.pid, pollMs: 10, warn: (line) => lines.push(line) },
+    ).done;
+    expect(lines).toEqual(['trellis-crew supervisor: main: exited with code 3']);
+    const team = readTeamFile(teamPath);
+    expect(team.ok && team.record?.sessions[0]?.error).toBe('exited with code 3');
+
+    const passes = join(dir, 'passes');
+    writeFileSync(passes, '#!/bin/sh\nexit 0\n');
+    chmodSync(passes, 0o755);
+    writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
+    const quiet: string[] = [];
+    await runSupervisor(
+      { binary: passes, cwd: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
+      { ownPid: process.pid, pollMs: 10, warn: (line) => quiet.push(line) },
+    ).done;
+    expect(quiet).toEqual([]);
+    const clean = readTeamFile(teamPath);
+    expect(clean.ok && clean.record?.sessions[0]?.error).toBeUndefined();
+  });
+
+  it('the default report writes the line to codex-supervisor.log beside the team record', async () => {
+    const dir = makeFixtureHome();
+    const teamPath = join(dir, 'team.json');
+    writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await runSupervisor(
+        { binary: join(dir, 'missing'), cwd: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
+        { ownPid: process.pid, pollMs: 10 },
+      ).done;
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(readFileSync(join(dir, 'codex-supervisor.log'), 'utf8')).toMatch(/^\S+ trellis-crew supervisor: main: could not start: .*ENOENT.*\n$/);
+  });
+
+  it('status prints the error the supervisor recorded for a session', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    writeTeam(t.env, {
+      version: 1,
+      harness: 'codex',
+      sessions: [
+        { name: 'main', pid: null, session_id: null, error: 'exited with code 3' },
+        { name: 'worker-1', pid: null, session_id: null },
+      ],
+    });
+    expect(await main(['status'], t.deps)).toBe(0);
+    expect(t.out.lines.find((l) => l.startsWith('main'))).toMatch(/error: exited with code 3$/);
+    expect(t.out.lines.find((l) => l.startsWith('worker-1'))).not.toMatch(/error/);
   });
 
   it('46: each set field prints one warning, and the session still starts', async () => {
@@ -114,6 +199,9 @@ describe('Codex CLI', () => {
     handle.stop();
     await handle.done;
     await waitFor(() => pids.every((pid) => !alive(pid)));
+    // A child ended by stop is not an error.
+    const after = readTeamFile(teamPath);
+    expect(after.ok && after.record?.sessions.map((s) => s.error)).toEqual([undefined, undefined]);
   });
 
   it('the supervisor starts nothing when its record never names it', async () => {

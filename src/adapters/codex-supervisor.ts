@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processStartTime, startedOf } from '../runner.ts';
 import { readTeamFile, writeTeamFile } from '../store/team-json.ts';
@@ -20,6 +21,23 @@ export interface SupervisorOptions {
   pollMs?: number;
   /** How long to wait for the team record to name this supervisor. */
   waitMs?: number;
+  /** Reports a failed child. Unset: standard error and codex-supervisor.log beside the team record. */
+  warn?: (line: string) => void;
+}
+
+// Merge note: open PR 24 adds the same `warn` option and defaultWarn to this
+// file. Keep one copy of each when the two merge.
+
+/** The default report for a failed child. The CLI starts the supervisor with no terminal, so the log file keeps the line. */
+function defaultWarn(teamPath: string): (line: string) => void {
+  return (line) => {
+    process.stderr.write(`${line}\n`);
+    try {
+      appendFileSync(join(dirname(teamPath), 'codex-supervisor.log'), `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
+    } catch {
+      // Standard error still has the line.
+    }
+  };
 }
 
 export interface SupervisorHandle {
@@ -37,6 +55,15 @@ function recordPid(teamPath: string, name: string, pid: number): void {
   entry.pid = pid;
   const started = startedOf(processStartTime(pid));
   if (started !== undefined) entry.started = started;
+  writeTeamFile(teamPath, team.record);
+}
+
+/** Writes why a child failed onto its team entry, so status prints it. */
+function recordError(teamPath: string, name: string, error: string): void {
+  const team = readTeamFile(teamPath);
+  const entry = team.ok ? team.record?.sessions.find((s) => s.name === name) : undefined;
+  if (!team.ok || !team.record || !entry) return;
+  entry.error = error;
   writeTeamFile(teamPath, team.record);
 }
 
@@ -67,22 +94,31 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
     if (children.size === 0) finish();
   };
 
+  const warn = options.warn ?? defaultWarn(job.teamPath);
+  const fail = (name: string, error: string): void => {
+    warn(`trellis-crew supervisor: ${name}: ${error}`);
+    recordError(job.teamPath, name, error);
+  };
   const startAll = (): void => {
     for (const session of job.sessions) {
       if (stopping) break;
       const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: process.env });
-      child.once('error', () => {
+      let failed = false;
+      child.once('error', (error) => {
+        failed = true;
+        if (!stopping) fail(session.name, `could not start: ${error.message}`);
         children.delete(session.name);
         settleWhenEmpty();
       });
-      child.once('exit', () => {
+      child.once('exit', (code, signal) => {
+        // A child that stop ended, or one already reported, is not recorded again.
+        if (!stopping && !failed && code !== 0) fail(session.name, code === null ? `ended by signal ${signal ?? 'unknown'}` : `exited with code ${code}`);
         children.delete(session.name);
         settleWhenEmpty();
       });
-      if (child.pid !== undefined) {
-        children.set(session.name, child);
-        recordPid(job.teamPath, session.name, child.pid);
-      }
+      // Tracked even with no pid, so the supervisor waits for a failed spawn's 'error' event before it ends.
+      children.set(session.name, child);
+      if (child.pid !== undefined) recordPid(job.teamPath, session.name, child.pid);
     }
     settleWhenEmpty();
   };

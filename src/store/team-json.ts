@@ -15,6 +15,8 @@ export interface TeamEntry {
   session_id: string | null;
   /** The process's start time when the CLI recorded the pid, so a reused pid is never signalled. */
   started?: string;
+  /** Why the session failed to start or ended early, as the Codex supervisor recorded it. */
+  error?: string;
 }
 
 /** Where the team's layout came from, so respawn can read it again. */
@@ -66,7 +68,8 @@ function isEntry(value: unknown): value is TeamEntry {
     typeof entry.name === 'string' &&
     (entry.pid === null || isPid(entry.pid)) &&
     (entry.session_id === null || typeof entry.session_id === 'string') &&
-    (entry.started === undefined || typeof entry.started === 'string')
+    (entry.started === undefined || typeof entry.started === 'string') &&
+    (entry.error === undefined || typeof entry.error === 'string')
   );
 }
 
@@ -110,6 +113,7 @@ export function readTeamFile(path: string): ReadResult<TeamRecord> {
       pid: s.pid,
       session_id: s.session_id,
       ...(s.started === undefined ? {} : { started: s.started }),
+      ...(s.error === undefined ? {} : { error: s.error }),
     })),
   };
   if (record.supervisor_started !== undefined) out.supervisor_started = record.supervisor_started;
