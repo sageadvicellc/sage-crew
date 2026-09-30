@@ -1,37 +1,63 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { main } from '../src/cli.ts';
 import type { FetchLatest } from '../src/registry.ts';
+import { writeInstallRecord } from '../src/store/install-yml.ts';
 import { makeTestEnv } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
 import { recordingRunner, type RecordedCall } from './helpers/recording-runner.ts';
 import { repoRoot } from './helpers/paths.ts';
 
 /**
- * Records every call to a node:fs function whose first argument names a
- * Claude credential file. It lets the run-time test prove that no command
- * touches the sentinel files it plants. The wrapper changes nothing else.
+ * Records every call to a node:fs, fs.promises, or node:fs/promises function
+ * whose first argument names a Claude credential file. The path may be a
+ * string, a Buffer, or a URL. It lets the run-time test prove that no
+ * command touches the sentinel files it plants. The wrapper changes nothing
+ * else.
  */
-const touched = vi.hoisted(() => [] as string[]);
+const recorder = vi.hoisted(() => {
+  const touched: string[] = [];
+  const CREDENTIAL_FILE = /(^|\/)(\.credentials\.json|\.claude\.json)$/;
+  const asPath = (value: unknown): string | undefined => {
+    if (typeof value === 'string') return value;
+    if (Buffer.isBuffer(value)) return value.toString('utf8');
+    if (value instanceof URL) return decodeURIComponent(value.pathname);
+    return undefined;
+  };
+  const wrapFunctions = (source: Record<string, unknown>): Record<string, unknown> => {
+    const wrapped: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(source)) {
+      if (typeof value === 'function' && /^[a-z]/.test(key)) {
+        const original = value as (...args: unknown[]) => unknown;
+        wrapped[key] = Object.assign(
+          function (this: unknown, ...args: unknown[]) {
+            const path = asPath(args[0]);
+            if (path !== undefined && CREDENTIAL_FILE.test(path)) touched.push(`${key}:${path}`);
+            return original.apply(this, args);
+          },
+          original,
+        );
+      } else {
+        wrapped[key] = value;
+      }
+    }
+    return wrapped;
+  };
+  return { touched, wrapFunctions };
+});
+const touched = recorder.touched;
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  const wrapped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(actual)) {
-    if (typeof value === 'function' && /^[a-z]/.test(key)) {
-      const original = value as (...args: unknown[]) => unknown;
-      wrapped[key] = Object.assign(
-        function (this: unknown, ...args: unknown[]) {
-          const first = args[0];
-          if (typeof first === 'string' && /(^|\/)(\.credentials\.json|\.claude\.json)$/.test(first)) touched.push(`${key}:${first}`);
-          return original.apply(this, args);
-        },
-        original,
-      );
-    } else {
-      wrapped[key] = value;
-    }
-  }
+  const wrapped = recorder.wrapFunctions(actual as unknown as Record<string, unknown>);
+  wrapped.promises = recorder.wrapFunctions(actual.promises as unknown as Record<string, unknown>);
+  return { ...wrapped, default: wrapped };
+});
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const wrapped = recorder.wrapFunctions(actual as unknown as Record<string, unknown>);
   return { ...wrapped, default: wrapped };
 });
 
@@ -83,7 +109,14 @@ const files = [
   ...codeFiles(join(repoRoot, 'src'), false),
   ...codeFiles(repoRoot, true),
 ].map((path) => ({ name: relative(repoRoot, path), text: readFileSync(path, 'utf8') }));
-const shipped = [...files, ...packageScripts];
+/** The shipped skills are prompts that run inside the user's sessions, so they are scanned too. */
+function skillFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? skillFiles(join(dir, entry.name)) : [join(dir, entry.name)],
+  );
+}
+const skills = skillFiles(join(repoRoot, 'skills')).map((path) => ({ name: relative(repoRoot, path), text: readFileSync(path, 'utf8') }));
+const shipped = [...files, ...packageScripts, ...skills];
 
 /** Every line of every shipped file that matches, as `file:line`. */
 function hits(pattern: RegExp): string[] {
@@ -133,6 +166,8 @@ function callSiteLiterals(): { where: string; literal: string }[] {
 describe('sign-in safety: static scan of shipped code', () => {
   it('scans the source files and the package scripts', () => {
     expect(files.length).toBeGreaterThan(20);
+    expect(skills.length).toBeGreaterThanOrEqual(7);
+    expect(skills.every((f) => f.name.startsWith('skills/'))).toBe(true);
     expect(packageScripts.length).toBeGreaterThan(3);
     expect(files.some((f) => f.name === 'src/adapters/claude-code.ts')).toBe(true);
   });
@@ -182,6 +217,19 @@ describe('sign-in safety: static scan of shipped code', () => {
     expect(named).toEqual(new Set(['src/runner.ts', 'src/adapters/codex-supervisor.ts', 'src/adapters/codex-guard.ts']));
   });
 
+  it('the git subcommands in the code are the ones the code makes, and none is a credential command', () => {
+    const wanted = new Set(['rev-parse', 'config', 'rev-list', 'ls-files', 'diff', 'log', 'diff-tree', 'cat-file']);
+    const found = new Set<string>();
+    for (const name of ['src/sanitize/run.ts', 'src/adapters/codex-guard.ts']) {
+      const text = files.find((f) => f.name === name)?.text ?? '';
+      for (const m of text.matchAll(/\[\s*'([a-z][a-z-]*)'/g)) found.add(m[1] as string);
+    }
+    // Array literals in those files that are not git arguments: config key parts, and shell and node names.
+    const notGit = new Set(['vars', 'subsection', 'sh', 'node', 'ignore']);
+    expect([...found].filter((word) => !wanted.has(word) && !notGit.has(word))).toEqual([]);
+    expect(found.has('credential')).toBe(false);
+  });
+
   it('no reference to a Claude credential store or a credential helper', () => {
     const stores = [
       '\\.credentials\\.json',
@@ -194,7 +242,13 @@ describe('sign-in safety: static scan of shipped code', () => {
       'apiKeyHelper',
     ];
     for (const store of stores) expect(hits(new RegExp(store))).toEqual([]);
-    expect(hits(/credentials/i)).toEqual([]);
+    // The word credential appears in three places, and none of them runs or reads one:
+    // the sanitizer's detail text for a password in a URL, the codex folder check that
+    // refuses a git config which names a credential helper, and the auditor skill's
+    // instruction to redact one. No process call holds the word.
+    const named = new Set(hits(/credential/i).map((h) => h.split(':')[0]));
+    expect(named).toEqual(new Set(['src/sanitize/checks.ts', 'src/adapters/codex-guard.ts', 'skills/department-auditor/SKILL.md']));
+    expect(callSiteLiterals().filter(({ literal }) => /credential/i.test(literal))).toEqual([]);
   });
 
   it('ANTHROPIC_API_KEY appears in one file only, and there it is read only as a set check', () => {
@@ -238,6 +292,22 @@ describe('sign-in safety: run time', () => {
     return `first argument ${args[0] ?? '(none)'} is not allowed`;
   }
 
+  /**
+   * The git calls the CLI makes, found by reading the runner call sites in
+   * src/adapters/codex-guard.ts (GIT_TOP and GIT_CONFIG), and nothing else.
+   * The sanitizer's own git calls run from npm run sanitize, never from a
+   * trellis-crew command, so they are not in this list.
+   */
+  const CLI_GIT_CALLS = [
+    ['rev-parse', '--show-toplevel'],
+    ['config', '--list', '--show-origin', '--includes', '-z'],
+  ];
+
+  function gitShapeProblem(args: readonly string[]): string | undefined {
+    const known = CLI_GIT_CALLS.some((call) => call.length === args.length && call.every((arg, i) => arg === args[i]));
+    return known ? undefined : `git ${args.join(' ')} is not a call the CLI makes`;
+  }
+
   function expectOnlyAllowedCalls(calls: readonly RecordedCall[]): void {
     const runs = calls.filter((c) => c.kind !== 'kill');
     expect(runs.every((c) => c.kind === 'run')).toBe(true);
@@ -245,6 +315,7 @@ describe('sign-in safety: run time', () => {
       expect(ALLOWED_PROGRAMS.has(basename(call.command))).toBe(true);
       expect(basename(call.command)).not.toBe('security');
     }
+    for (const call of runs.filter((c) => basename(c.command) === 'git')) expect(gitShapeProblem(call.args)).toBeUndefined();
     const claudeCalls = runs.filter((c) => basename(c.command) === 'claude');
     expect(claudeCalls.length).toBeGreaterThan(0);
     for (const call of claudeCalls) expect(claudeShapeProblem(call.args)).toBeUndefined();
@@ -273,6 +344,24 @@ describe('sign-in safety: run time', () => {
     expect(claudeShapeProblem(['plugin', 'marketplace', 'add', 'owner/repo'])).toBeUndefined();
   });
 
+  it('the git shape check refuses credential helpers and any other git call', () => {
+    expect(gitShapeProblem(['credential', 'fill'])).toBeDefined();
+    expect(gitShapeProblem(['credential-osxkeychain', 'get'])).toBeDefined();
+    expect(gitShapeProblem(['config', 'credential.helper'])).toBeDefined();
+    expect(gitShapeProblem(['config', '--list', '--show-origin', '--includes', '-z', 'credential.helper'])).toBeDefined();
+    expect(gitShapeProblem(['rev-parse', '--show-toplevel'])).toBeUndefined();
+    expect(gitShapeProblem(['config', '--list', '--show-origin', '--includes', '-z'])).toBeUndefined();
+  });
+
+  it('up on codex makes only the two git calls the code makes', async () => {
+    const t = rig();
+    await main(['up', '--harness', 'codex'], t.deps);
+    const gits = t.runner.calls.filter((c) => basename(c.command) === 'git');
+    expect(gits.length).toBeGreaterThan(0);
+    for (const call of gits) expect(gitShapeProblem(call.args)).toBeUndefined();
+    for (const call of t.runner.calls.filter((c) => c.kind === 'run')) expect(basename(call.command)).toBe('git');
+  });
+
   it('install, start, status, respawn, stop, update, and up on claude-code call only allowed programs, in allowed shapes', async () => {
     const t = rig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
     for (const argv of COMMANDS) await main(argv, t.deps);
@@ -291,7 +380,17 @@ describe('sign-in safety: run time', () => {
     touched.length = 0;
     // A control: the recorder sees a read of a sentinel, so silence below means something.
     readFileSync(credentials, 'utf8');
-    expect(touched).toEqual([`readFileSync:${credentials}`]);
+    touched.length = 0;
+    // The same control through every API and every path type: string, Buffer, and URL.
+    const paths = [credentials, Buffer.from(credentials), pathToFileURL(credentials)];
+    for (const path of paths) readFileSync(path, 'utf8');
+    for (const path of paths) await readFile(path, 'utf8');
+    for (const path of paths) await fs.promises.readFile(path, 'utf8');
+    expect(touched).toEqual([
+      ...paths.map(() => `readFileSync:${credentials}`),
+      ...paths.map(() => `readFile:${credentials}`),
+      ...paths.map(() => `readFile:${credentials}`),
+    ]);
     touched.length = 0;
     for (const argv of COMMANDS) await main(argv, t.deps);
     expect(touched).toEqual([]);
@@ -369,9 +468,66 @@ describe('up: the API key warning', () => {
     expect(set.errText()).not.toContain('ANTHROPIC_API_KEY');
   });
 
+  it('up prints the warning once, not again from the start step', async () => {
+    const t = rig();
+    expect(await main(UP, t.deps)).toBe(0);
+    expect(t.log.filter((line) => line === `err:${WARNING}`)).toHaveLength(1);
+  });
+
   it('does not warn on codex, which has its own sign-in', async () => {
     const t = rig();
     expect(await main(['up', '--harness', 'codex'], t.deps)).toBe(0);
+    expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
+  });
+});
+
+describe('start: the API key warning', () => {
+  function startRig(vars: Record<string, string | undefined> = {}) {
+    const t = rig(vars);
+    writeInstallRecord(t.env, { harness: 'claude-code', transport: 'native', plugin_version: null });
+    return t;
+  }
+
+  it('warns first when ANTHROPIC_API_KEY is unset, blank, or white space, and still starts the team', async () => {
+    for (const value of [undefined, '', '  ']) {
+      const t = startRig(value === undefined ? {} : { ANTHROPIC_API_KEY: value });
+      expect(await main(['start', '--yes'], t.deps)).toBe(0);
+      expect(t.log[0]).toBe(`err:${WARNING}`);
+      expect(t.runner.calls.some((c) => c.args[0] === '--bg')).toBe(true);
+    }
+  });
+
+  it('does not warn when the key is set, and never echoes it', async () => {
+    const t = startRig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
+    expect(await main(['start', '--yes'], t.deps)).toBe(0);
+    expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
+    expect(t.log.join('\n')).not.toContain(FIXTURE_KEY);
+  });
+
+  it('does not warn on Bedrock or Vertex', async () => {
+    for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']) {
+      const t = startRig({ [name]: '1' });
+      expect(await main(['start', '--yes'], t.deps)).toBe(0);
+      expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
+    }
+  });
+
+  it('gives the same exit code with the key set and unset on the same failing input', async () => {
+    const unset = startRig();
+    const set = startRig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
+    // A second start finds a team record and fails with exit 1.
+    expect(await main(['start', '--yes'], unset.deps)).toBe(0);
+    expect(await main(['start', '--yes'], set.deps)).toBe(0);
+    const codeUnset = await main(['start', '--yes'], unset.deps);
+    const codeSet = await main(['start', '--yes'], set.deps);
+    expect(codeUnset).toBe(1);
+    expect(codeSet).toBe(codeUnset);
+  });
+
+  it('does not warn when the harness is codex', async () => {
+    const t = rig();
+    writeInstallRecord(t.env, { harness: 'codex', transport: 'file-mailbox', plugin_version: null });
+    await main(['start', '--yes'], t.deps);
     expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
   });
 });
