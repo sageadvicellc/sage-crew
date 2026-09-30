@@ -139,24 +139,46 @@ never writes skills into your project folder, and it never sets
 `CODEX_HOME`.
 
 - Each copied folder holds a marker file, `.trellis-crew-skill.json`. It
-  names the skill and the SHA-256 hash of its source files. If the
-  marker names the same skill as the folder, the CLI owns that folder.
-  Any other folder is not the CLI's own.
+  names the skill and the SHA-256 hash of the folder's files. For the
+  CLI to own a folder, two things must be true. The marker names this
+  package and the same skill. The files still match the hash in the
+  marker.
+- An older CLI copied the skills with no marker. If a folder has no
+  marker and its files match the package exactly, the CLI adopts it: it
+  writes the marker and owns the folder. If that folder is for a skill
+  the list leaves out, the CLI removes it as stale. A folder with no
+  marker that does not match exactly is not the CLI's own.
 - A folder of your own with the name of an approved skill is left alone.
-  The install then stops, names the folder, and exits 1. It changes
-  nothing. Move or rename the folder, then run the command again.
+  If you edited a folder that the CLI owns, that folder is left alone
+  too. In each case, the install stops, names the folder, and exits 1.
+  It changes nothing in `~/.agents/skills/`. Move or rename the folder,
+  then run the command again.
 - The CLI replaces each folder it owns. If a skill is no longer
-  approved, the CLI removes the folder it owns for that skill. It
-  touches nothing else in `~/.agents/skills/`.
+  approved, the CLI removes the folder it owns for that skill. It also
+  removes its own leftover temp folders, whose names start with
+  `.trellis-crew-`. It touches nothing else in `~/.agents/skills/`.
 - The CLI does not follow a symbolic link. A link in place of a skill
   folder, `~/.agents`, or `~/.agents/skills` stops the install.
 
 `trellis-crew update --check` also compares each copy with the package.
-It prints one line for each skill: in step, drifted, missing, not owned,
-or stale. A drifted copy differs from the package. A stale folder is one
-the CLI owns for a skill that is no longer approved. A drifted, missing,
-or stale skill makes the check exit 1, and it names each one. The check
-changes nothing. Run `trellis-crew update` to copy the skills fresh.
+It prints one line for each skill, with one of these states:
+
+- in step: the copy matches the package.
+- drifted: the CLI owns the copy, and the package changed since the
+  copy was made.
+- missing: no folder has the skill's name.
+- not owned: a folder of your own, or a link, has the skill's name.
+- edited since export: the CLI made the copy, and its files changed
+  after that.
+- unreadable: reading the folder failed. The line gives the error.
+- unmarked copy: the folder has no marker and matches the package. The
+  next install or update adopts it.
+- stale: the CLI owns the folder, and the skill is no longer approved.
+
+Each state except in step and unmarked copy makes the check exit 1. The
+check names each such skill. It also warns about each leftover temp
+folder. A warning does not change the exit code. The check changes
+nothing. Run `trellis-crew update` to copy the skills fresh.
 
 ### Exit codes
 

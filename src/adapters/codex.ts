@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { stateDir } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
 import { ensurePrivateFolder } from '../fs-private.ts';
-import { exportSkills, skillCheckReport } from './codex-skills.ts';
+import { agentsSkillsDir, exportSkills, skillCheckReport } from './codex-skills.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
@@ -14,7 +14,7 @@ export function packageSkillsDir(): string {
 
 /** The folder Codex CLI reads user skills from. */
 export function codexSkillsDir(home: string): string {
-  return join(home, '.agents', 'skills');
+  return agentsSkillsDir(home);
 }
 
 /** The supervisor script beside this file: `.ts` when run from source, `.js` when built. */
@@ -30,7 +30,7 @@ export function codexExecArgs(flagArgs: readonly string[], kickoff: string): str
 
 /** Exports each approved skill into `~/.agents/skills/<skill>/`. See codex-skills.ts. */
 function copySkills(ctx: AdapterContext): PluginOutcome {
-  return exportSkills(codexSkillsDir(ctx.env.home), ctx.out);
+  return exportSkills(ctx.env.home, ctx.out);
 }
 
 /**
@@ -94,6 +94,6 @@ export const codexAdapter: Adapter = {
   },
 
   checkPlugin(env) {
-    return skillCheckReport(codexSkillsDir(env.home));
+    return skillCheckReport(env.home);
   },
 };

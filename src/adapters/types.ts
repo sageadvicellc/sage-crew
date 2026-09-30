@@ -27,10 +27,11 @@ export type LaunchOutcome = { ok: true; entry: TeamEntry } | { ok: false; messag
  */
 export type PluginOutcome = { ok: true } | { ok: false; message: string; skipped?: boolean };
 
-/** What `update --check` reports about the installed plugin. Any error line makes it exit 1. */
+/** What `update --check` reports about the installed plugin. Any error line makes it exit 1; a warning does not. */
 export interface PluginCheck {
   lines: string[];
   errors: string[];
+  warnings: string[];
 }
 
 /** What each harness adapter provides. */

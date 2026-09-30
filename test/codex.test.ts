@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { treeHash } from '../src/adapters/codex-skills.ts';
 import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
 import { main } from '../src/cli.ts';
 import { processStartTime } from '../src/runner.ts';
@@ -138,7 +139,10 @@ describe('Codex CLI', () => {
       expect(readFileSync(join(target, skill, 'SKILL.md'), 'utf8')).toBe(readFileSync(join(repoRoot, 'skills', skill, 'SKILL.md'), 'utf8'));
       expect(JSON.parse(readFileSync(join(target, skill, '.trellis-crew-skill.json'), 'utf8'))).toMatchObject({ owner: 'trellis-crew', skill });
     }
+    // A copy from an older package: an extra file, and a marker whose hash covers it.
     writeFileSync(join(target, 'department-lead', 'stale.txt'), 'old');
+    const lead = join(target, 'department-lead');
+    writeFileSync(join(lead, '.trellis-crew-skill.json'), JSON.stringify({ owner: 'trellis-crew', skill: 'department-lead', sha256: treeHash(lead) }));
     writeFileSync(join(target, 'someone-elses-skill.md'), 'keep');
     mkdirSync(join(target, 'someone-elses-folder'));
     expect(await main(['update'], t.deps)).toBe(0);
