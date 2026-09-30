@@ -226,7 +226,7 @@ describe('up --harness codex', () => {
     // The only runs are the working-folder checks: once before step 1, and once before the supervisor starts.
     const check = [
       ['rev-parse', '--show-toplevel'],
-      ['config', '--get', 'core.hooksPath'],
+      ['config', '--list', '--show-origin', '--includes', '-z'],
     ];
     expect(t.runner.calls.filter((c) => c.kind === 'run').map((c) => c.args)).toEqual([...check, ...check]);
     const job = supervisorJob(t);

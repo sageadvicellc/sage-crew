@@ -211,7 +211,13 @@ The CLI also refuses your home folder and `/`. It refuses a folder that
 holds another git repository one to three levels below it. It follows
 no symbolic link during that search. It refuses a folder whose
 `core.hooksPath` points inside it, because a session can write a git
-hook there. The folder's own `.git` is allowed. The folder is checked
+hook there. It refuses a `core.fsmonitor` command inside the folder for
+the same reason. Through `include.path` or `includeIf`, git can read a
+settings file from inside the folder. The CLI refuses the folder then.
+The folder's own `.git` is allowed, and so is a settings file inside
+that `.git`. Each of these git
+calls runs with every `GIT_` variable removed, so it sees what plain git
+sees. The folder is checked
 three times:
 
 - before `up` installs anything

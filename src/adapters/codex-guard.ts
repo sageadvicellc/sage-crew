@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, realpathSync, type Dirent } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, type Dirent } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { findBinary } from '../detect/probe.ts';
 import { stateDir, type Env } from '../env.ts';
@@ -19,7 +19,16 @@ const GIT_TIMEOUT_MS = 10_000;
 
 /** The git calls the check makes, in the working folder. */
 const GIT_TOP = ['rev-parse', '--show-toplevel'];
-const GIT_HOOKS = ['config', '--get', 'core.hooksPath'];
+const GIT_CONFIG = ['config', '--list', '--show-origin', '--includes', '-z'];
+
+/** The environment for every git call the check makes: every GIT_ variable is removed, so git sees what plain git sees. */
+function withoutGitVars(vars: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    if (value !== undefined && !key.startsWith('GIT_')) out[key] = value;
+  }
+  return out;
+}
 
 /** One git answer: the exit code, or null when git could not run, with its output. */
 interface GitAnswer {
@@ -42,8 +51,9 @@ function real(path: string): string | undefined {
 /**
  * Judges a working folder. It must be the top of a git worktree, compared
  * after realpath, and not `/` or the home folder. It must hold no other
- * repository at depth 1 to 3, and its git hooks folder must not sit inside
- * it. The folder's own `.git` is allowed: Codex keeps it read-only.
+ * repository at depth 1 to 3. Git must read no config file from inside
+ * it, and its hooks folder and fsmonitor command must not sit inside it.
+ * The folder's own `.git` is allowed: Codex keeps it read-only.
  */
 function workdirProblem(folder: string, home: string, git: Git): string | undefined {
   const why = (reason: string) => `${WORKDIR_RULE} ${printable(folder)}: ${reason}.`;
@@ -55,32 +65,114 @@ function workdirProblem(folder: string, home: string, git: Git): string | undefi
   if (top.code !== 0) return why(`it is not in a git worktree (${top.reason || `git exited with code ${String(top.code)}`})`);
   const topPath = firstLine(top.stdout);
   if (real(topPath) !== realFolder) return why(`it is not the top of a git worktree. The top is ${printable(topPath)}`);
-  const nested = nestedRepoProblem(realFolder) ?? hooksPathProblem(realFolder, home, git(GIT_HOOKS));
+  const nested = nestedRepoProblem(realFolder) ?? configProblem(realFolder, home, git(GIT_CONFIG));
   return nested === undefined ? undefined : why(nested);
 }
 
+interface ConfigEntry {
+  origin: string;
+  key: string;
+  /** Unset for a key with no value, which git reads as true. */
+  value: string | undefined;
+}
+
 /**
- * Refuses a git hooks folder inside the working folder, since a session
- * could write a hook there that git later runs. The value resolves as git
- * resolves it: an absolute path as it is, a leading `~/` against the home
- * folder, and any other path against the worktree top. Then the realpath
- * of its deepest existing parent is taken. Exit code 1 means the value is
- * unset, which passes. Any other failure refuses, so the check fails
- * closed. A `~user` form cannot be resolved here, so it refuses too.
+ * Reads `git config --list --show-origin -z` output. Each entry is the
+ * origin, a NUL, the key, then a newline and the value when there is one,
+ * and a NUL. Returns undefined when the output does not have that shape.
  */
-function hooksPathProblem(top: string, home: string, answer: GitAnswer): string | undefined {
-  if (answer.code === 1) return undefined;
-  if (answer.code !== 0) {
-    return `git config --get core.hooksPath failed, so the hooks folder cannot be checked (${answer.reason || `exit code ${String(answer.code)}`})`;
+function parseConfigList(stdout: string): ConfigEntry[] | undefined {
+  if (stdout === '') return [];
+  if (!stdout.endsWith('\0')) return undefined;
+  const tokens = stdout.slice(0, -1).split('\0');
+  if (tokens.length % 2 !== 0) return undefined;
+  const entries: ConfigEntry[] = [];
+  for (let i = 0; i < tokens.length; i += 2) {
+    const pair = tokens[i + 1] as string;
+    const newline = pair.indexOf('\n');
+    entries.push({
+      origin: tokens[i] as string,
+      key: newline === -1 ? pair : pair.slice(0, newline),
+      value: newline === -1 ? undefined : pair.slice(newline + 1),
+    });
   }
-  const value = answer.stdout.replace(/\n$/, '');
-  let path: string;
-  if (value === '~' || value.startsWith('~/')) path = join(home, value.slice(1));
-  else if (value.startsWith('~')) return `core.hooksPath is ${printable(value)}, which names another user's home folder, so it cannot be checked`;
-  else path = isAbsolute(value) ? value : resolve(top, value);
-  const resolved = realOfExisting(path);
-  if (resolved !== top && !within(resolved, top)) return undefined;
-  return `core.hooksPath is ${printable(value)}, which resolves to ${printable(resolved)}, inside the working folder, so a session could write a git hook`;
+  return entries;
+}
+
+/**
+ * Resolves a path from git's config as git does: an absolute path as it
+ * is, a leading `~/` against the home folder, and any other path against
+ * `base`. Then the realpath of its deepest existing parent is taken. A
+ * `~user` form cannot be resolved here, so it returns undefined.
+ */
+function resolveConfigPath(value: string, base: string, home: string): string | undefined {
+  if (value === '~' || value.startsWith('~/')) return realOfExisting(join(home, value.slice(1)));
+  if (value.startsWith('~')) return undefined;
+  return realOfExisting(isAbsolute(value) ? value : resolve(base, value));
+}
+
+/** The values git reads as a boolean. Any other core.fsmonitor value is a command git runs. */
+const GIT_BOOLEAN = /^(true|false|yes|no|on|off|1|0)$/i;
+
+/**
+ * Refuses git settings that let a session change what git runs, by
+ * writing inside the working folder:
+ * - a config file that git reads from inside the working folder, outside
+ *   its own top-level `.git` folder, either as an entry's origin or as the
+ *   target of an include, so an empty include counts too
+ * - a `core.hooksPath` that resolves inside the working folder
+ * - a `core.fsmonitor` command that resolves inside the working folder
+ * Relative hooks and fsmonitor paths resolve against the worktree top, and
+ * relative include paths against the including file's folder. Every entry
+ * is checked, not only the last one. Any git failure refuses, so the check
+ * fails closed.
+ */
+function configProblem(top: string, home: string, answer: GitAnswer): string | undefined {
+  const failed = (reason: string) => `git config --list failed, so git's settings cannot be checked (${reason})`;
+  if (answer.code !== 0) return failed(answer.reason || `exit code ${String(answer.code)}`);
+  const entries = parseConfigList(answer.stdout);
+  if (entries === undefined) return failed('its answer cannot be read');
+  const ownGit = join(top, '.git');
+  const gitFolder = isRealFolder(ownGit) ? realOfExisting(ownGit) : undefined;
+  const inside = (path: string) => path === top || within(path, top);
+  const exposed = (path: string) => inside(path) && !(gitFolder !== undefined && (path === gitFolder || within(path, gitFolder)));
+  const readsFile = (file: string, key: string) =>
+    `git reads the config file ${printable(file)}, for the key ${printable(key)}, and that file sits inside the working folder`;
+  const otherHome = (key: string, value: string) => `${key} is ${printable(value)}, which names another user's home folder, so it cannot be checked`;
+
+  for (const entry of entries) {
+    const file = entry.origin.startsWith('file:') ? realOfExisting(resolve(top, entry.origin.slice('file:'.length))) : undefined;
+    if (file !== undefined && exposed(file)) return readsFile(file, entry.key);
+    if (file !== undefined && /^include(if\..+)?\.path$/.test(entry.key)) {
+      const target = resolveConfigPath(entry.value ?? '', dirname(file), home);
+      if (target === undefined) return otherHome(entry.key, entry.value ?? '');
+      if (exposed(target)) return readsFile(target, entry.key);
+    }
+    if (entry.key === 'core.hookspath') {
+      const value = entry.value ?? '';
+      const resolved = resolveConfigPath(value, top, home);
+      if (resolved === undefined) return otherHome('core.hooksPath', value);
+      if (inside(resolved)) {
+        return `core.hooksPath is ${printable(value)}, which resolves to ${printable(resolved)}, inside the working folder, so a session could write a git hook`;
+      }
+    }
+    if (entry.key === 'core.fsmonitor' && entry.value !== undefined && !GIT_BOOLEAN.test(entry.value)) {
+      const resolved = resolveConfigPath(entry.value, top, home);
+      if (resolved === undefined) return otherHome('core.fsmonitor', entry.value);
+      if (inside(resolved)) {
+        return `core.fsmonitor is ${printable(entry.value)}, which resolves to ${printable(resolved)}, inside the working folder, so a session could write the command git runs`;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isRealFolder(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** How deep below the working folder the scan for other repositories looks. */
@@ -132,10 +224,10 @@ function firstLine(text: string): string {
 export async function checkWorkdir(env: Env, runner: Runner): Promise<string | undefined> {
   const binary = findBinary('git', env.path);
   const answers = new Map<string, GitAnswer>();
-  for (const args of [GIT_TOP, GIT_HOOKS]) {
+  for (const args of [GIT_TOP, GIT_CONFIG]) {
     let answer: GitAnswer = { code: null, stdout: '', reason: 'git is not on PATH' };
     if (binary !== undefined) {
-      const result = await runner.run(binary, args, { cwd: env.cwd, env: env.vars, timeoutMs: GIT_TIMEOUT_MS });
+      const result = await runner.run(binary, args, { cwd: env.cwd, env: withoutGitVars(env.vars), timeoutMs: GIT_TIMEOUT_MS });
       answer = result.timedOut
         ? { code: null, stdout: '', reason: 'git did not answer in time' }
         : { code: result.code, stdout: result.stdout, reason: result.error ?? firstLine(result.stderr) };
@@ -149,7 +241,13 @@ export async function checkWorkdir(env: Env, runner: Runner): Promise<string | u
 export function checkWorkdirSync(folder: string, home: string): string | undefined {
   return workdirProblem(folder, home, (args) => {
     try {
-      const stdout = execFileSync('git', [...args], { cwd: folder, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_TIMEOUT_MS });
+      const stdout = execFileSync('git', [...args], {
+        cwd: folder,
+        env: withoutGitVars(process.env),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: GIT_TIMEOUT_MS,
+      });
       return { code: 0, stdout, reason: '' };
     } catch (error) {
       const failed = error as { status?: unknown; stderr?: unknown };

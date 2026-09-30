@@ -72,7 +72,7 @@ describe('the Codex working folder: checkWorkdir through the injected runner', (
     expect(await checkWorkdir(env, runner)).toBeUndefined();
     expect(runner.calls).toEqual([
       { kind: 'run', command: join(fixtureBin, 'git'), args: ['rev-parse', '--show-toplevel'] },
-      { kind: 'run', command: join(fixtureBin, 'git'), args: ['config', '--get', 'core.hooksPath'] },
+      { kind: 'run', command: join(fixtureBin, 'git'), args: ['config', '--list', '--show-origin', '--includes', '-z'] },
     ]);
   });
 
@@ -318,15 +318,20 @@ describe('the Codex working folder does not hold its own git hooks folder', () =
     expect(await both(repo.root)).toEqual([undefined, undefined]);
   });
 
-  it('refuses when git config fails in any way other than an unset value', async () => {
+  it('refuses when git config fails in any way, or its answer cannot be read', async () => {
     const repo = makeFixtureRepo();
-    const runner = recordingRunner();
-    const answer = runner.run.bind(runner);
-    runner.run = async (command, args, options) =>
-      args[0] === 'config' ? { code: 128, stdout: '', stderr: 'fatal: bad config line 1\n', timedOut: false } : answer(command, args, options);
-    expect(await checkWorkdir(makeTestEnv({ cwd: repo.root }), runner)).toMatch(
-      /: git config --get core\.hooksPath failed, so the hooks folder cannot be checked \(fatal: bad config line 1\)\.$/,
-    );
+    for (const [answerOf, reason] of [
+      [{ code: 128, stdout: '', stderr: 'fatal: bad config line 1\n', timedOut: false }, /\(fatal: bad config line 1\)\.$/],
+      [{ code: 1, stdout: '', stderr: '', timedOut: false }, /\(exit code 1\)\.$/],
+      [{ code: 0, stdout: 'file:.git/config\0core.bare\nfalse', stderr: '', timedOut: false }, /\(its answer cannot be read\)\.$/],
+    ] as const) {
+      const runner = recordingRunner();
+      const answer = runner.run.bind(runner);
+      runner.run = async (command, args, options) => (args[0] === 'config' ? answerOf : answer(command, args, options));
+      const problem = await checkWorkdir(makeTestEnv({ cwd: repo.root }), runner);
+      expect(problem).toMatch(/: git config --list failed, so git's settings cannot be checked /);
+      expect(problem).toMatch(reason);
+    }
   });
 
   it('every place refuses it: up, launchAll before the job write, launch, and the supervisor', async () => {
@@ -349,6 +354,108 @@ describe('the Codex working folder does not hold its own git hooks folder', () =
     const warnings: string[] = [];
     await runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: (line) => warnings.push(line) }).done;
     expect(warnings).toEqual([expect.stringMatching(inside)]);
+  });
+});
+
+describe('the Codex working folder feeds git no config file or fsmonitor command from inside it', () => {
+  const both = async (cwd: string, home = makeFixtureHome()): Promise<[string | undefined, string | undefined]> => [
+    await checkWorkdir(makeTestEnv({ cwd, home }), recordingRunner()),
+    checkWorkdirSync(cwd, home),
+  ];
+  const fileInside = (file: string, key: string) =>
+    new RegExp(`: git reads the config file .*${file.replace(/[.]/g, '\\.')}, for the key ${key.replace(/[.]/g, '\\.')}, and that file sits inside the working folder\\.$`);
+
+  it('refuses an include.path to a file inside the folder, even one that sets nothing dangerous', async () => {
+    const withKey = makeFixtureRepo();
+    withKey.write('shared.cfg', '[user]\n\tname = fixture\n');
+    withKey.git('config', 'include.path', '../shared.cfg');
+    for (const problem of await both(withKey.root)) expect(problem).toMatch(fileInside('shared.cfg', 'include.path'));
+
+    // An empty file adds no entry of its own, so the include itself is what is refused.
+    const empty = makeFixtureRepo();
+    empty.write('empty.cfg', '');
+    empty.git('config', 'include.path', '../empty.cfg');
+    for (const problem of await both(empty.root)) expect(problem).toMatch(fileInside('empty.cfg', 'include.path'));
+  });
+
+  it('refuses an includeIf gitdir: include inside the folder', async () => {
+    const repo = makeFixtureRepo();
+    repo.write(join('conf', 'if.cfg'), '[user]\n\temail = fixture@example.invalid\n');
+    repo.git('config', `includeIf.gitdir:${repo.root}/.path`, '../conf/if.cfg');
+    for (const problem of await both(repo.root)) expect(problem).toMatch(/: git reads the config file .*conf\/if\.cfg, for the key includeif\.gitdir:.*\.path, and that file sits inside the working folder\.$/);
+  });
+
+  it('passes an include inside the folder\'s own .git, and an include outside the repo', async () => {
+    const inGit = makeFixtureRepo();
+    inGit.write(join('.git', 'extra.cfg'), '[user]\n\tname = fixture\n');
+    inGit.git('config', 'include.path', 'extra.cfg');
+    expect(await both(inGit.root)).toEqual([undefined, undefined]);
+
+    const outside = makeFixtureRepo();
+    const elsewhere = join(makeFixtureHome(), 'shared.cfg');
+    writeFileSync(elsewhere, '[user]\n\tname = fixture\n');
+    outside.git('config', 'include.path', elsewhere);
+    expect(await both(outside.root)).toEqual([undefined, undefined]);
+  });
+
+  it('refuses a core.fsmonitor path inside the folder, and passes true and a path outside', async () => {
+    const inside = makeFixtureRepo();
+    inside.git('config', 'core.fsmonitor', join('tools', 'watch'));
+    for (const problem of await both(inside.root)) {
+      expect(problem).toMatch(/: core\.fsmonitor is tools\/watch, which resolves to .*, inside the working folder, so a session could write the command git runs\.$/);
+    }
+    for (const value of ['true', 'false', 'yes', 'no', 'on', 'off', '1', '0', 'TRUE']) {
+      const repo = makeFixtureRepo();
+      repo.git('config', 'core.fsmonitor', value);
+      expect(await both(repo.root)).toEqual([undefined, undefined]);
+    }
+    const outside = makeFixtureRepo();
+    outside.git('config', 'core.fsmonitor', join(makeFixtureHome(), 'watch'));
+    expect(await both(outside.root)).toEqual([undefined, undefined]);
+  });
+});
+
+describe('the working-folder check runs git with no GIT_ variable', () => {
+  const planted = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_DIR: '/nonexistent-git-dir' };
+  const hooksInside = /: core\.hooksPath is \.githooks, which resolves to .*, inside the working folder/;
+
+  it('the runner port strips every GIT_ variable, so a repo hooksPath is still found and refused', async () => {
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.hooksPath', '.githooks');
+    const env = makeTestEnv({ cwd: repo.root });
+    const runner = recordingRunner();
+    const answer = runner.run.bind(runner);
+    const seen: RunOptions['env'][] = [];
+    runner.run = async (command, args, options) => {
+      seen.push(options?.env);
+      return answer(command, args, options);
+    };
+    expect(await checkWorkdir({ ...env, vars: { ...env.vars, ...planted } }, runner)).toMatch(hooksInside);
+    expect(seen).toHaveLength(2);
+    for (const vars of seen) {
+      expect(Object.keys(vars ?? {}).filter((key) => key.startsWith('GIT_'))).toEqual([]);
+      expect(vars).toEqual(env.vars);
+    }
+  });
+
+  const saved: Record<string, string | undefined> = {};
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it('the supervisor strips every GIT_ variable from its own environment for git', () => {
+    // The repo is made first, so no fixture git call sees the planted variables.
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.hooksPath', '.githooks');
+    const home = makeFixtureHome();
+    for (const [key, value] of Object.entries(planted)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+    expect(checkWorkdirSync(repo.root, home)).toMatch(hooksInside);
   });
 });
 

@@ -31,21 +31,24 @@ const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
 /** The git calls the working-folder check makes. The recording runner answers only these. */
 const ANSWERED_GIT = [
   ['rev-parse', '--show-toplevel'],
-  ['config', '--get', 'core.hooksPath'],
+  ['config', '--list', '--show-origin', '--includes', '-z'],
 ];
 
 /**
  * Answers the working-folder check's git calls with the real git in the
  * call's folder, so the check reads a real temp repository, with git's own
  * exit code. Git is not a harness, so this runs no agent session. Every
- * other git call is refused.
+ * other git call is refused. Git runs with the environment the call was
+ * given, except PATH, which stays this process's PATH so the real git is
+ * found instead of the fixture stub.
  */
 function realGit(args: readonly string[], options: RunOptions | undefined): RunResult {
   if (!ANSWERED_GIT.some((known) => known.length === args.length && known.every((arg, i) => arg === args[i]))) {
     return { code: 2, stdout: '', stderr: 'fixture: this git call is not answered\n', timedOut: false };
   }
+  const env = options?.env === undefined ? process.env : { ...options.env, PATH: process.env.PATH };
   try {
-    const stdout = execFileSync('git', [...args], { cwd: options?.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execFileSync('git', [...args], { cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     return { code: 0, stdout, stderr: '', timedOut: false };
   } catch (error) {
     const failed = error as { status?: unknown; stderr?: unknown };
