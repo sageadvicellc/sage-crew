@@ -3,6 +3,10 @@ import type { Transport } from './roles/schema.ts';
 
 export type TransportFlag = Transport;
 
+/** The harnesses that `up` installs and starts in one step. */
+export const UP_HARNESSES = ['codex', 'claude-code'] as const;
+export type UpHarness = (typeof UP_HARNESSES)[number];
+
 export type Command =
   | { name: 'help' }
   | { name: 'version' }
@@ -19,6 +23,18 @@ export type Command =
     }
   | { name: 'update'; check: boolean }
   | { name: 'start'; workers?: number; roles?: string; yes: boolean }
+  | {
+      name: 'up';
+      harness: UpHarness;
+      workers?: number;
+      roles?: string;
+      /** --yes: confirm a roles file with no question. It never consents to the inbound setting. */
+      yes: boolean;
+      /** --accept-inbound: consent to the inbound setting, as install --yes does. */
+      acceptInbound: boolean;
+      /** --skip-inbound: never change the inbound setting. */
+      skipInbound: boolean;
+    }
   | { name: 'status' }
   | { name: 'stop'; forceStop: boolean }
   | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string; yes?: boolean; forceStop?: boolean };
@@ -29,6 +45,7 @@ export const USAGE = `Usage:
   trellis-crew install [--harness <name>] [--non-interactive] [--reconfigure] [--transport <name>] [--yes | --skip-inbound]
   trellis-crew update [--check]
   trellis-crew start [--workers N] [--roles sagespec.yml] [--yes]
+  trellis-crew up --harness <codex|claude-code> [--workers N] [--roles sagespec.yml] [--yes] [--accept-inbound | --skip-inbound]
   trellis-crew status
   trellis-crew stop [--force-stop]
   trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N] [--yes] [--force-stop]
@@ -81,6 +98,51 @@ function parseStart(args: string[]): ParseResult {
   const command: Command = { name: 'start', yes: values.yes === true };
   if (workers !== undefined) command.workers = workers;
   if (typeof values.roles === 'string') command.roles = values.roles;
+  return { ok: true, command };
+}
+
+/** A `scheme://` address or a `git@` address. `up --roles` takes a local file only. */
+function isRemoteAddress(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value) || value.startsWith('git@');
+}
+
+function parseUp(args: string[]): ParseResult {
+  const { values } = parse(
+    args,
+    {
+      harness: { type: 'string' },
+      workers: { type: 'string' },
+      roles: { type: 'string' },
+      yes: { type: 'boolean', short: 'y', default: false },
+      'accept-inbound': { type: 'boolean', default: false },
+      'skip-inbound': { type: 'boolean', default: false },
+    },
+    false,
+  );
+  const harness = values.harness;
+  if (typeof harness !== 'string') return { ok: false, message: 'up needs --harness codex or --harness claude-code' };
+  if (!(UP_HARNESSES as readonly string[]).includes(harness)) {
+    return { ok: false, message: `up takes --harness codex or --harness claude-code, not "${harness}"` };
+  }
+  const workers = parseWorkers(typeof values.workers === 'string' ? values.workers : undefined);
+  if (workers instanceof Error) return { ok: false, message: workers.message };
+  const command: Extract<Command, { name: 'up' }> = {
+    name: 'up',
+    harness: harness as UpHarness,
+    yes: values.yes === true,
+    acceptInbound: values['accept-inbound'] === true,
+    skipInbound: values['skip-inbound'] === true,
+  };
+  if (command.acceptInbound && command.skipInbound) {
+    return { ok: false, message: '--accept-inbound and --skip-inbound cannot be used together' };
+  }
+  if (workers !== undefined) command.workers = workers;
+  if (typeof values.roles === 'string') {
+    if (isRemoteAddress(values.roles)) {
+      return { ok: false, message: `--roles takes a local file path, not a URL or a git address: "${values.roles}"` };
+    }
+    command.roles = values.roles;
+  }
   return { ok: true, command };
 }
 
@@ -169,6 +231,8 @@ export function parseCommand(argv: readonly string[]): ParseResult {
       }
       case 'start':
         return parseStart(rest);
+      case 'up':
+        return parseUp(rest);
       case 'status':
         return parseBare(first, rest);
       case 'stop':

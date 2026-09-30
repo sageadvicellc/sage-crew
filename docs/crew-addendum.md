@@ -405,7 +405,9 @@ the section above that closes it.
 ## 11. Decisions for the maintainer
 
 1. The command name: `trellis-crew up`, as written here, or a separate
-   `crew` binary.
+   `crew` binary. `trellis-crew up --harness <name>` exists now, and it
+   runs the install and then `start`, so the `crew.yml` design must fit
+   with it.
 2. The Cursor adapter writes a rule file and skills inside the project,
    excluded from git and removed by `down`. The alternatives are to accept
    that, or to leave Cursor out until it documents a rules path outside

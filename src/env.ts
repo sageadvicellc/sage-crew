@@ -52,7 +52,7 @@ export function codexDir(env: Env): string {
 }
 
 /** The CLI's own state folder, which holds install.yml and team.json. */
-export function stateDir(env: Env): string {
+export function stateDir(env: Pick<Env, 'home'>): string {
   return join(env.home, '.trellis-crew');
 }
 

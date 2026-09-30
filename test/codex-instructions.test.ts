@@ -103,10 +103,9 @@ const PROPERTY_RUNS = 1000;
 
 /** The text a `-c developer_instructions=...` pair carries, parsed as TOML the way Codex parses it. */
 function instructionsOf(args: readonly string[]): string {
-  const at = args.indexOf('-c');
-  expect(at).toBeGreaterThanOrEqual(0);
-  const pair = args[at + 1] as string;
-  expect(pair.startsWith('developer_instructions=')).toBe(true);
+  const pairs = args.filter((arg, i) => args[i - 1] === '-c' && arg.startsWith('developer_instructions='));
+  expect(pairs).toHaveLength(1);
+  const pair = pairs[0] as string;
   const parsed = parse(pair) as { developer_instructions?: unknown };
   expect(typeof parsed.developer_instructions).toBe('string');
   return parsed.developer_instructions as string;
@@ -231,13 +230,13 @@ describe('role instructions from the default team', () => {
     });
   });
 
-  it('places the instructions after exec and before the prompt', () => {
-    const args = codexExecArgs([], 'the kickoff', 'lead');
+  it('places the instructions after the sandbox arguments and just before --', () => {
+    const args = codexExecArgs([], 'the kickoff', undefined, 'lead');
     expect(args[0]).toBe('exec');
-    expect(args.at(-1)).toBe('the kickoff');
-    const at = args.indexOf('-c');
-    expect(at).toBeGreaterThan(0);
-    expect(at + 1).toBeLessThan(args.length - 1);
+    expect(args.slice(-2)).toEqual(['--', 'the kickoff']);
+    expect(args.at(-4)).toBe('-c');
+    expect(args.at(-3)).toMatch(/^developer_instructions="/);
+    expect(args.at(-5)).toMatch(/^sandbox_workspace_write\.writable_roots=/);
     expect(instructionsOf(args)).toBe(shippedBody('lead'));
   });
 
@@ -257,7 +256,8 @@ describe('role instructions from the default team', () => {
     expect(job.sessions.map((s) => s.name).sort()).toEqual(Object.keys(roleOf).sort());
     for (const session of job.sessions) {
       expect(session.args[0]).toBe('exec');
-      expect(session.args.indexOf('-c')).toBeLessThan(session.args.length - 1);
+      expect(session.args.at(-4)).toBe('-c');
+      expect(session.args.at(-2)).toBe('--');
       expect(instructionsOf(session.args)).toBe(shippedBody(roleOf[session.name] as Role));
     }
   });
@@ -267,9 +267,9 @@ describe('role instructions from the default team', () => {
     const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {} };
     const outcome = await codexAdapter.launch('benchmark', 'the kickoff', [], ctx, 'auditor');
     expect(outcome.ok).toBe(true);
-    const args = t.runner.calls[0]?.args ?? [];
+    const args = t.runner.calls.find((c) => c.kind === 'detached')?.args ?? [];
     expect(args[0]).toBe('exec');
-    expect(args.at(-1)).toBe('the kickoff');
+    expect(args.slice(-2)).toEqual(['--', 'the kickoff']);
     expect(instructionsOf(args)).toBe(shippedBody('auditor'));
   });
 });

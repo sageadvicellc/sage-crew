@@ -3,14 +3,20 @@ import { closeSync, constants, openSync, readFileSync, realpathSync, writeSync }
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processStartTime, startedOf } from '../runner.ts';
+import type { Role } from '../roles/schema.ts';
 import { readTeamFile, writeTeamFile } from '../store/team-json.ts';
+import { execArgsProblem } from './codex-args.ts';
+import { checkWorkdirSync, codexChildEnv } from './codex-guard.ts';
 
 /** What the CLI hands the supervisor: the binary, the folder, the team record, and each session's arguments. */
 export interface SupervisorJob {
   binary: string;
   cwd: string;
+  /** The home folder, which is never a working folder. */
+  home: string;
   teamPath: string;
-  sessions: { name: string; args: string[] }[];
+  /** Each session's role, so the supervisor can build its role instructions again and compare them. */
+  sessions: { name: string; role: Role; args: string[] }[];
   /** Never set. The supervisor reads its own pid, so the job file cannot name the wrong one. */
   supervisorPid?: undefined;
 }
@@ -21,18 +27,14 @@ export interface SupervisorOptions {
   pollMs?: number;
   /** How long to wait for the team record to name this supervisor. */
   waitMs?: number;
-  /** Reports a failed child. Unset: standard error and codex-supervisor.log beside the team record. */
+  /** Reports a refused or failed child. Unset: standard error and codex-supervisor.log beside the team record. */
   warn?: (line: string) => void;
 }
-
-// Merge note: trellis-crew#24 adds its own `warn` option and `defaultWarn` to
-// this file. Keep one copy of each when the two merge, and keep this one's
-// no-follow open of codex-supervisor.log.
 
 const LOG_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
 
 /**
- * The default report for a failed child. The CLI starts the supervisor with
+ * The default report for a refused or failed child. The CLI starts the supervisor with
  * no terminal, so the log file keeps the line. The log is opened with no
  * link followed. A refused or failed write is reported on standard error,
  * and never ends the supervisor.
@@ -119,13 +121,22 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
     recordError(job.teamPath, name, error);
   };
   const startAll = (): void => {
+    // Every child can write the working folder, so it is checked again here, before any child starts.
+    const workdir = checkWorkdirSync(job.cwd, job.home);
+    if (workdir !== undefined) {
+      warn(`trellis-crew supervisor: refused to start any session: ${workdir}`);
+      return finish();
+    }
     for (const session of job.sessions) {
       if (stopping) break;
-      // Merge note: trellis-crew#24 checks `session.args` again here with codex-args.ts `execArgsProblem`.
-      // These args hold one `-c developer_instructions=...`. That check must allow exactly that one `-c`,
-      // compared against the value rebuilt fresh from the shipped skill for the session's role, and never
-      // `-c` in general. The full rule and the smuggle tests it needs are at codex.ts `codexExecArgs`.
-      const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: process.env });
+      // Defense in depth: the CLI built these arguments, and the supervisor checks them again before it runs any.
+      // The role from the job file is checked against the four roles, and its value is built again from the shipped skill.
+      const problem = execArgsProblem(session.args, session.role);
+      if (problem !== undefined) {
+        fail(session.name, `refused, so it was not started: ${problem}`);
+        continue;
+      }
+      const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: codexChildEnv(process.env) });
       let failed = false;
       child.once('error', (error) => {
         failed = true;
