@@ -164,16 +164,11 @@ function isEntryPoint(): boolean {
 if (isEntryPoint()) {
   const jobPath = process.argv[2];
   if (jobPath === undefined) process.exit(2);
-  // The flag is checked before the job file is read. runSupervisor writes the reason to the log beside the team record.
+  // With the flag off, this entry point reads nothing: not the job file, not the team path. It writes to
+  // standard error only, with no log file, and exits.
   const experimental = codexExperimentalProblem(process.env);
   if (experimental !== undefined) {
     process.stderr.write(`trellis-crew supervisor: refused to start any session: ${experimental}\n`);
-    try {
-      const job = JSON.parse(readFileSync(jobPath, 'utf8')) as Pick<SupervisorJob, 'teamPath'>;
-      defaultWarn(job.teamPath)(`trellis-crew supervisor: refused to start any session: ${experimental}`);
-    } catch {
-      // Standard error still has the line.
-    }
     process.exit(2);
   }
   const job = JSON.parse(readFileSync(jobPath, 'utf8')) as SupervisorJob;

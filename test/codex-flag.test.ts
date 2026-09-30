@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { codexExecArgs } from '../src/adapters/codex-args.ts';
 import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
 import { supervisorScriptPath } from '../src/adapters/codex.ts';
@@ -331,6 +331,27 @@ describe('the Codex supervisor checks the flag itself', () => {
     expect(ran.status).toBe(2);
     expect(ran.stderr).toContain(MESSAGE);
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it('run as its own process with the flag off, reads no job file and writes no log', () => {
+    const dir = makeFixtureHome();
+    const unreadable = join(dir, 'unreadable.json');
+    writeFileSync(unreadable, JSON.stringify({ teamPath: join(dir, 'sub', 'team.json') }));
+    chmodSync(unreadable, 0o000);
+    // A readable job whose team folder exists: a supervisor that read it could log there.
+    const readable = join(dir, 'readable.json');
+    writeFileSync(readable, JSON.stringify({ teamPath: join(dir, 'team.json') }));
+    for (const jobPath of [join(dir, 'does-not-exist.json'), unreadable, readable]) {
+      const ran = spawnSync(process.execPath, [supervisorScriptPath(), jobPath], {
+        env: { PATH: process.env.PATH ?? '', HOME: dir },
+        encoding: 'utf8',
+      });
+      expect(ran.status).toBe(2);
+      expect(ran.stderr).toBe(`trellis-crew supervisor: refused to start any session: ${MESSAGE}\n`);
+    }
+    // No log file anywhere in the fixture, including beside the named team path.
+    expect(readdirSync(dir, { recursive: true }).filter((name) => String(name).endsWith('codex-supervisor.log'))).toEqual([]);
+    chmodSync(unreadable, 0o600);
   });
 
   it('start passes the variable to the supervisor process in the env it spawns with', async () => {
