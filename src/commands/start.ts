@@ -33,6 +33,19 @@ export interface StartOptions {
   yes: boolean;
   /** The harness the team must run on, from `up --harness`. A roles file that names another one is refused. */
   harness?: HarnessId;
+  /**
+   * The SHA-256 of the roles text that `up` read and checked, or null for
+   * the default team. The text that start loads must match it, so a file
+   * that changed in between is never launched.
+   */
+  expectSha256?: string | null;
+}
+
+/** The line that refuses a roles file naming another harness than --harness, or undefined when it does not. */
+export function harnessMismatch(loaded: Extract<LoadResult, { ok: true }>, harness: HarnessId): string | undefined {
+  const named = loaded.config.harness;
+  if (named === 'auto' || named === harness) return undefined;
+  return `${printable(loaded.source)}: the roles file names the harness ${named}, but --harness is ${harness}. Nothing was started.`;
 }
 
 /**
@@ -52,9 +65,13 @@ export async function runStart(options: StartOptions, deps: CliDeps): Promise<nu
     for (const line of loaded.lines) deps.err(line);
     return EXIT_USAGE;
   }
-  const named = loaded.config.harness;
-  if (options.harness !== undefined && named !== 'auto' && named !== options.harness) {
-    deps.err(`${printable(loaded.source)}: the roles file names the harness ${named}, but --harness is ${options.harness}. Nothing was started.`);
+  const mismatch = options.harness === undefined ? undefined : harnessMismatch(loaded, options.harness);
+  if (mismatch !== undefined) {
+    deps.err(mismatch);
+    return EXIT_USAGE;
+  }
+  if (options.expectSha256 !== undefined && loaded.sha256 !== options.expectSha256) {
+    deps.err(`${printable(loaded.source)}: the roles file changed after up read it. Nothing was started.`);
     return EXIT_USAGE;
   }
   if (options.roles === undefined && loaded.file !== null) {
@@ -202,7 +219,13 @@ export function prepareSession(
 }
 
 function contextFor(plan: LaunchPlan, deps: CliDeps): AdapterContext {
-  return { env: deps.env, runner: deps.runner, binaryPath: plan.binaryPath, out: deps.out };
+  return {
+    env: deps.env,
+    runner: deps.runner,
+    binaryPath: plan.binaryPath,
+    out: deps.out,
+    ...(plan.mailbox === undefined ? {} : { mailbox: plan.mailbox }),
+  };
 }
 
 /** Starts one session and prints its warnings. */

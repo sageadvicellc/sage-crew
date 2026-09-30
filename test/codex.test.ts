@@ -1,7 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { codexAdapter, codexExecArgs, refusedCodexFlag } from '../src/adapters/codex.ts';
+import { codexAdapter } from '../src/adapters/codex.ts';
+import { codexExecArgs, codexSandboxArgs, execArgsProblem, refusedCodexFlag } from '../src/adapters/codex-args.ts';
 import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
 import { main } from '../src/cli.ts';
 import { processStartTime } from '../src/runner.ts';
@@ -27,8 +28,19 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-/** Every `codex exec` argv up to the kickoff: the sandbox, network access off, then `--`. */
-const SANDBOXED_EXEC = ['exec', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=false', '--'];
+/** Every `codex exec` argv up to the kickoff: the sandbox, network access off, the writable roots, then `--`. */
+function sandboxedExec(roots: readonly string[]): string[] {
+  return [
+    'exec',
+    '--sandbox',
+    'workspace-write',
+    '-c',
+    'sandbox_workspace_write.network_access=false',
+    '-c',
+    `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`,
+    '--',
+  ];
+}
 
 function expectNoBypass(args: readonly string[]): void {
   for (const arg of args) {
@@ -38,43 +50,126 @@ function expectNoBypass(args: readonly string[]): void {
 }
 
 describe('codex exec arguments', () => {
-  it('sets workspace-write with network access off, and puts the kickoff after --', () => {
-    expect(codexExecArgs([], 'do the work')).toEqual([...SANDBOXED_EXEC, 'do the work']);
+  it('sets workspace-write, network access off, and the mailbox as the one writable root, and puts the kickoff after --', () => {
+    expect(codexExecArgs([], 'do the work', '/srv/mail')).toEqual([...sandboxedExec(['/srv/mail']), 'do the work']);
     // A kickoff that starts with - stays the prompt, because it follows --.
-    expect(codexExecArgs([], '--dangerously-bypass-approvals-and-sandbox')).toEqual([...SANDBOXED_EXEC, '--dangerously-bypass-approvals-and-sandbox']);
-    const args = codexExecArgs(['-m', 'model-a'], 'k');
-    expect(args).toEqual(['exec', '-m', 'model-a', ...SANDBOXED_EXEC.slice(1), 'k']);
+    expect(codexExecArgs([], '--dangerously-bypass-approvals-and-sandbox', '/srv/mail')).toEqual([
+      ...sandboxedExec(['/srv/mail']),
+      '--dangerously-bypass-approvals-and-sandbox',
+    ]);
+    // With no mailbox, the writable roots are empty, so none from the user's config apply.
+    expect(codexExecArgs([], 'k', undefined)).toEqual([...sandboxedExec([]), 'k']);
+    // The path is quoted as a TOML string, so a quote or a backslash in it stays inside the string.
+    expect(codexSandboxArgs('/srv/a "b"\\c').at(-1)).toBe('sandbox_workspace_write.writable_roots=["/srv/a \\"b\\"\\\\c"]');
+    const args = codexExecArgs([], 'k', '/srv/mail');
     expect(args[args.indexOf('--sandbox') + 1]).toBe('workspace-write');
     expectNoBypass(args.slice(0, -1));
   });
 
-  it('refuses a launch flag that could change the sandbox', () => {
+  it('refuses a mailbox path with a control character, or one that is not absolute', () => {
+    expect(() => codexSandboxArgs('/srv/mail\nx')).toThrow(/the mailbox folder path holds a control character/);
+    expect(() => codexSandboxArgs('/srv/mail\u007f')).toThrow(/control character/);
+    expect(() => codexSandboxArgs('mail')).toThrow(/must be an absolute path/);
+  });
+
+  it('refuses every launch flag, because no Codex launch flag is verified', () => {
     const refused = [
       ['--sandbox', 'danger-full-access'],
       ['--sandbox=danger-full-access'],
       ['-s', 'danger-full-access'],
       ['-sdanger-full-access'],
       ['-c', 'sandbox_mode="danger-full-access"'],
-      ['-csandbox_workspace_write.network_access=true'],
       ['--config', 'sandbox_workspace_write.network_access=true'],
-      ['--config=sandbox_mode="danger-full-access"'],
       ['--dangerously-bypass-approvals-and-sandbox'],
-      ['-m', 'danger-full-access'],
+      ['--add-dir', '/'],
+      ['-C', '/'],
+      ['-p', 'wide-open'],
+      ['--profile', 'wide-open'],
+      ['--enable', 'x'],
+      ['--ignore-user-config'],
+      ['--oss'],
+      ['-m', 'model-a'],
     ];
     for (const flagArgs of refused) {
-      expect(refusedCodexFlag(flagArgs)).toMatch(/is refused on Codex CLI, because trellis-crew sets the sandbox itself/);
-      expect(() => codexExecArgs(flagArgs, 'k')).toThrow(/is refused on Codex CLI/);
+      expect(refusedCodexFlag(flagArgs)).toBe(
+        `the launch flag "${flagArgs[0]}" is refused on Codex CLI, because no Codex launch flag is verified. trellis-crew sets the sandbox itself.`,
+      );
+      expect(() => codexExecArgs(flagArgs, 'k', '/srv/mail')).toThrow(/is refused on Codex CLI/);
     }
     expect(refusedCodexFlag([])).toBeUndefined();
-    expect(refusedCodexFlag(['-m', 'model-a', '--effort', 'high'])).toBeUndefined();
+  });
+
+  it('refuses a bare word, which codex exec reads as a subcommand or the prompt', () => {
+    for (const word of ['resume', 'fork', 'review', 'help']) {
+      expect(refusedCodexFlag([word])).toBe(`the launch argument "${word}" is refused on Codex CLI, because it is a codex exec subcommand.`);
+    }
+    expect(refusedCodexFlag(['danger-full-access'])).toBe('the launch argument "danger-full-access" is refused on Codex CLI, because it is not a flag.');
+  });
+
+  it('checks a value apart from its flag name, once a flag is verified', () => {
+    const verified = new Set(['-m']);
+    // A model name is a value. It never trips the name check.
+    expect(refusedCodexFlag(['-m', 'sonnet'], verified)).toBeUndefined();
+    expect(refusedCodexFlag(['-m', 'danger-full-access'], verified)).toBeUndefined();
+    expect(refusedCodexFlag(['-m', 'review'], verified)).toBeUndefined();
+    expect(refusedCodexFlag(['-m', '-sonnet'], verified)).toBe('the value "-sonnet" of the launch flag "-m" is refused on Codex CLI, because it starts with -.');
+    expect(refusedCodexFlag(['-m'], verified)).toBe('the launch flag "-m" is refused on Codex CLI, because it has no value.');
+    expect(refusedCodexFlag(['-m', 'a\nb'], verified)).toMatch(/because it holds a control character/);
+    expect(refusedCodexFlag(['-m', 'sonnet', '--oss'], verified)).toMatch(/"--oss" is refused/);
+  });
+
+  it('execArgsProblem accepts only the exact sandbox arguments', () => {
+    expect(execArgsProblem(codexExecArgs([], 'k', '/srv/mail'))).toBeUndefined();
+    expect(execArgsProblem(codexExecArgs([], 'k', undefined))).toBeUndefined();
+    expect(execArgsProblem(['exec', 'k'])).toMatch(/not the sandbox arguments that trellis-crew sets/);
+    const wide = codexExecArgs([], 'k', '/srv/mail').map((a) => (a === 'workspace-write' ? 'danger-full-access' : a));
+    expect(execArgsProblem(wide)).toMatch(/not the sandbox arguments that trellis-crew sets/);
+    const netOn = codexExecArgs([], 'k', '/srv/mail').map((a) => a.replace('network_access=false', 'network_access=true'));
+    expect(execArgsProblem(netOn)).toMatch(/not the sandbox arguments/);
+    const twoRoots = codexExecArgs([], 'k', '/srv/mail').map((a) => a.replace('["/srv/mail"]', '["/srv/mail","/"]'));
+    expect(execArgsProblem(twoRoots)).toMatch(/not the sandbox arguments/);
+    expect(execArgsProblem(['exec', '--oss', ...codexExecArgs([], 'k', '/srv/mail').slice(1)])).toMatch(/"--oss" is refused/);
   });
 
   it('respawn refuses an injected sandbox flag and starts nothing', async () => {
     const t = installedOn('codex', 'file-mailbox');
-    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {} };
+    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {}, mailbox: '/srv/mail' };
     const outcome = await codexAdapter.launch('main', 'k', ['--sandbox', 'danger-full-access'], ctx);
     expect(outcome).toEqual({ ok: false, message: expect.stringMatching(/"--sandbox" is refused on Codex CLI/) });
     expect(t.runner.calls).toEqual([]);
+  });
+
+  it('respawn passes the mailbox as the writable root', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {}, mailbox: '/srv/mail' };
+    expect(await codexAdapter.launch('main', 'k', [], ctx)).toMatchObject({ ok: true });
+    expect(t.runner.calls[0]?.args).toEqual([...sandboxedExec(['/srv/mail']), 'k']);
+  });
+
+  it('launchAll refuses a mailbox path with a control character, and starts nothing', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {}, mailbox: '/srv/ma\til' };
+    const outcome = await codexAdapter.launchAll?.([{ name: 'main', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'));
+    expect(outcome).toEqual({ ok: false, message: expect.stringMatching(/^main: the mailbox folder path holds a control character/) });
+    expect(t.runner.calls).toEqual([]);
+  });
+
+  it('start gives each session the default mailbox as its writable root', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    expect(await main(['start'], t.deps)).toBe(0);
+    const spawn = t.runner.calls.find((c) => c.kind === 'detached');
+    const job = JSON.parse(readFileSync(spawn?.args[1] as string, 'utf8')) as SupervisorJob;
+    const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
+    for (const session of job.sessions) expect(session.args.slice(0, -1)).toEqual(sandboxedExec([mailbox]));
+  });
+
+  it('start gives each session a custom mailbox from the roles file as its writable root', async () => {
+    const t = installedOn('codex', 'file-mailbox');
+    const file = writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('operator: you', 'operator: you\nmailbox: ~/team-mail'));
+    expect(await main(['start', '--roles', file], t.deps)).toBe(0);
+    const spawn = t.runner.calls.find((c) => c.kind === 'detached');
+    const job = JSON.parse(readFileSync(spawn?.args[1] as string, 'utf8')) as SupervisorJob;
+    for (const session of job.sessions) expect(session.args.slice(0, -1)).toEqual(sandboxedExec([join(t.env.home, 'team-mail')]));
   });
 
   it('start refuses a roles-file flag that reaches the sandbox, and starts no supervisor', async () => {
@@ -83,7 +178,7 @@ describe('codex exec arguments', () => {
     const t = installedOn('codex', 'file-mailbox', { adapters: { codex: leaky } });
     const file = writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('autocompact: 400k', 'autocompact: 400k\n    model: danger-full-access'));
     expect(await main(['start', '--roles', file], t.deps)).toBe(1);
-    expect(t.err.text()).toMatch(/helper-a: the launch flag "--sandbox" is refused on Codex CLI/);
+    expect(t.err.text()).toContain('helper-a: the launch flag "--sandbox" is refused on Codex CLI, because no Codex launch flag is verified.');
     expect(t.runner.calls).toEqual([]);
     expect(readTeam(t.env)).toEqual({ ok: true, record: undefined });
   });
@@ -96,7 +191,7 @@ describe('codex exec arguments', () => {
     const spawn = t.runner.calls.find((c) => c.kind === 'detached');
     const job = JSON.parse(readFileSync(spawn?.args[1] as string, 'utf8')) as SupervisorJob;
     for (const session of job.sessions) {
-      expect(session.args.slice(0, -1)).toEqual(SANDBOXED_EXEC);
+      expect(session.args.slice(0, -1)).toEqual(sandboxedExec([join(t.env.home, '.trellis-crew', 'mailbox')]));
       expectNoBypass(session.args.slice(0, -1));
     }
   });
@@ -120,7 +215,7 @@ describe('Codex CLI', () => {
     expect(job.binary).toBe(join(fixtureBin, 'codex'));
     expect(job.supervisorPid).toBeUndefined();
     const mainJob = job.sessions.find((s) => s.name === 'main');
-    expect(mainJob?.args).toEqual([...SANDBOXED_EXEC, mainJob?.args.at(-1)]);
+    expect(mainJob?.args).toEqual([...sandboxedExec([join(t.env.home, '.trellis-crew', 'mailbox')]), mainJob?.args.at(-1)]);
     expect(mainJob?.args.at(-1)).toMatch(/You are main, the lead\.[\s\S]*file mailbox at/);
     expect(t.out.text()).toMatch(/supervisor/);
   });
@@ -132,9 +227,12 @@ describe('Codex CLI', () => {
     if (launchAll === undefined) throw new Error('no launchAll');
     chmodSync(join(t.env.home, '.trellis-crew'), 0o755);
     const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {} };
-    await expect(launchAll([{ name: 'main', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'))).rejects.toThrow(
-      /open to other users/,
-    );
+    // A folder or disk problem is a named step that failed, never a throw.
+    expect(await launchAll([{ name: 'main', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'))).toEqual({
+      ok: false,
+      message: expect.stringMatching(/^could not write the supervisor job file .*codex-supervisor\.json: .*open to other users/),
+    });
+    expect(existsSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json'))).toBe(false);
     expect(t.runner.calls).toEqual([]);
   });
 
@@ -168,11 +266,11 @@ describe('Codex CLI', () => {
       cwd: dir,
       teamPath,
       sessions: [
-        { name: 'main', args: ['exec', 'kickoff one'] },
-        { name: 'worker-1', args: ['exec', 'kickoff two'] },
+        { name: 'main', args: codexExecArgs([], 'kickoff one', dir) },
+        { name: 'worker-1', args: codexExecArgs([], 'kickoff two', dir) },
       ],
     };
-    const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10 });
+    const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: () => {} });
     await waitFor(() => {
       const team = readTeamFile(teamPath);
       return team.ok && !!team.record && team.record.sessions.every((s) => s.pid !== null);
@@ -186,6 +284,48 @@ describe('Codex CLI', () => {
     handle.stop();
     await handle.done;
     await waitFor(() => pids.every((pid) => !alive(pid)));
+  });
+
+  it('the supervisor refuses a child whose arguments lack the exact sandbox, says why, and starts the rest', async () => {
+    const dir = makeFixtureHome();
+    const bin = join(dir, 'codex');
+    writeFileSync(bin, '#!/bin/sh\nexec /bin/sleep 30\n');
+    chmodSync(bin, 0o755);
+    const teamPath = join(dir, 'team.json');
+    const names = ['bare', 'wide', 'flagged', 'good'];
+    writeTeamFile(teamPath, {
+      version: 1,
+      harness: 'codex',
+      supervisor_pid: process.pid,
+      sessions: names.map((name) => ({ name, pid: null, session_id: null })),
+    });
+    const good = codexExecArgs([], 'k', dir);
+    const job: SupervisorJob = {
+      binary: bin,
+      cwd: dir,
+      teamPath,
+      sessions: [
+        { name: 'bare', args: ['exec', 'k'] },
+        { name: 'wide', args: good.map((a) => (a === 'workspace-write' ? 'danger-full-access' : a)) },
+        { name: 'flagged', args: ['exec', '--dangerously-bypass-approvals-and-sandbox', ...good.slice(1)] },
+        { name: 'good', args: good },
+      ],
+    };
+    const warnings: string[] = [];
+    const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: (line) => warnings.push(line) });
+    await waitFor(() => {
+      const team = readTeamFile(teamPath);
+      return team.ok && team.record?.sessions.find((s) => s.name === 'good')?.pid !== null;
+    });
+    const team = readTeamFile(teamPath);
+    if (!team.ok || !team.record) throw new Error('no team');
+    expect(team.record.sessions.filter((s) => s.pid !== null).map((s) => s.name)).toEqual(['good']);
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toMatch(/^trellis-crew supervisor: bare: refused, so it was not started: .*not the sandbox arguments/);
+    expect(warnings[1]).toMatch(/^trellis-crew supervisor: wide: refused/);
+    expect(warnings[2]).toMatch(/^trellis-crew supervisor: flagged: refused, so it was not started: .*--dangerously-bypass-approvals-and-sandbox/);
+    handle.stop();
+    await handle.done;
   });
 
   it('the supervisor starts nothing when its record never names it', async () => {

@@ -116,9 +116,13 @@ trellis-crew up --harness claude-code --accept-inbound
   So it asks no question.
 - `up` takes the flags that `start` takes: `--workers N`,
   `--roles <file>`, and `--yes`.
-- `--roles` must name a local file. A URL, a `git@` address, a folder,
-  or a symbolic link exits 2. The CLI checks the file before the install
-  and again before `start`.
+- `--roles` must name a local regular file. A URL, a `git@` address, or
+  a folder exits 2. The last part of the path must not be a symbolic
+  link. A parent folder can still be a link. `up` reads the file once,
+  and it checks the team before the install. So a bad roles file, or
+  one that names another harness, installs nothing. Before `start`, `up`
+  checks the file again. If the file changed after `up` read it, `up`
+  starts nothing. `start --roles` does not make these checks.
 - `--yes` confirms a roles file that `up` finds in the current folder.
   With no `--yes`, `up` starts nothing, because it asks no question.
 - `--yes` never changes your settings file. On Claude Code, add
@@ -127,9 +131,13 @@ trellis-crew up --harness claude-code --accept-inbound
   file alone and exits 1. The inbound setting is described under "Set it
   up once".
 
+When `install.yml` already records the same harness, `up` keeps the
+transport it records and prints it. `install --harness` does not.
+
 `up` stops at the first step that fails. It prints that step's message,
 then a line that names the step, and it exits with that step's code.
-When the install step fails, nothing starts.
+When the install step fails, nothing starts. When `start` fails, the
+line says that the install step already ran.
 
 A later design plans `trellis-crew up` with a `crew.yml` file, in
 `docs/crew-addendum.md`. That design must fit with `up --harness`, which
@@ -151,11 +159,8 @@ that you set and prints a warning that names the session and the field.
   You start each session in its own terminal.
 - Codex CLI sessions start under one supervisor process. `start` returns
   at once. The supervisor starts each `codex exec` process and records
-  its process ID. `stop` ends the supervisor and each session. Each
-  session runs with `--sandbox workspace-write`, and network access is
-  off. The CLI never uses `danger-full-access` or
-  `--dangerously-bypass-approvals-and-sandbox`. It refuses a launch flag
-  that can change the sandbox.
+  its process ID. `stop` ends the supervisor and each session. See
+  "The Codex CLI sandbox" below.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.
@@ -166,6 +171,39 @@ By default, on every harness except Claude Code and Qwen Code, sessions
 talk through a file mailbox. The default folder is
 `~/.trellis-crew/mailbox`. Set `mailbox` in the roles file to use
 another folder. The value must not hold a `..` part.
+
+### The Codex CLI sandbox
+
+The CLI sets three things on the `codex exec` command line for each
+session.
+
+- The sandbox mode is `--sandbox workspace-write`. The local
+  `codex exec --help` of codex-cli 0.157.0 describes `--sandbox` as
+  "Select the sandbox policy to use when executing model-generated
+  shell commands".
+- Network access is off, through
+  `-c sandbox_workspace_write.network_access=false`.
+- The writable roots are the mailbox folder only, through
+  `-c sandbox_workspace_write.writable_roots=[...]`. This list replaces
+  the list in your own `~/.codex/config.toml`. With no mailbox, the list
+  is empty.
+
+The help lists `-c` as an override that is "parsed as TOML". It does not
+list the keys under `sandbox_workspace_write`. The CLI uses the key names
+that the codex-cli 0.157.0 binary holds, and a later build must check
+them again.
+
+The CLI never uses `danger-full-access` or
+`--dangerously-bypass-approvals-and-sandbox`. Codex CLI has no verified
+launch flag, so the CLI refuses every launch flag and every bare word
+before the prompt. The supervisor checks each session's arguments again
+before it starts that session. If the arguments are wrong, it refuses
+that session and writes the reason to `codex-supervisor.log` in the
+state folder.
+
+This is not a full boundary. Your own `~/.codex/config.toml` can still
+change other keys. Each session gets the environment of the process
+that started it.
 
 ### Exit codes
 

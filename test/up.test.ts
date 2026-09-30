@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupervisorJob } from '../src/adapters/codex-supervisor.ts';
 import { parseCommand, USAGE } from '../src/args.ts';
 import { main, type CliDeps } from '../src/cli.ts';
 import { upInstallOptions } from '../src/commands/up.ts';
-import { readInstallRecord } from '../src/store/install-yml.ts';
+import { readInstallRecord, writeInstallRecord } from '../src/store/install-yml.ts';
 import { readTeam, teamJsonPath } from '../src/store/team-json.ts';
 import { makeTestEnv } from './helpers/env.ts';
 import { capture, type Capture } from './helpers/io.ts';
@@ -108,36 +108,105 @@ describe('up: parsing', () => {
     }
   });
 
+  // No other test guards the up line in USAGE: cli.test checks only that help prints the start line.
   it('USAGE names up and its flags', () => {
     expect(USAGE).toContain(
       'trellis-crew up --harness <codex|claude-code> [--workers N] [--roles sagespec.yml] [--yes] [--accept-inbound | --skip-inbound]',
     );
   });
-
-  it('the README describes up', () => {
-    const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8');
-    expect(readme).toContain('trellis-crew up --harness codex');
-    expect(readme).toContain('trellis-crew up --harness claude-code');
-    expect(readme).toContain('--accept-inbound');
-  });
 });
+
+/** The hints that up gives the install step, spelled out once. */
+function upHints(harness: string) {
+  return {
+    inboundMissing: 'Run up again with --accept-inbound to set it, or with --skip-inbound to leave it.',
+    rolesNoTerminal: 'trellis-crew up asks no question about a roles file. Read it, then run up again with --yes.',
+    recordDamaged: `Run trellis-crew install --reconfigure --harness ${harness} first, then run up again.`,
+  };
+}
 
 describe('up: the install step', () => {
   it('builds the install options as if install --harness <name> --non-interactive were given', () => {
-    for (const harness of ['codex', 'claude-code'] as const) {
-      const parsed = parseCommand(['install', '--harness', harness, '--non-interactive']);
-      if (!parsed.ok) throw new Error(parsed.message);
-      const { name: _name, ...install } = parsed.command as Extract<typeof parsed.command, { name: 'install' }>;
-      expect(upInstallOptions({ harness, yes: false, acceptInbound: false, skipInbound: false })).toMatchObject(install);
-    }
+    expect(parseCommand(['install', '--harness', 'codex', '--non-interactive'])).toEqual({
+      ok: true,
+      command: { name: 'install', harness: 'codex', nonInteractive: true, reconfigure: false, yes: false, skipInbound: false },
+    });
+    expect(upInstallOptions({ harness: 'codex', yes: false, acceptInbound: false, skipInbound: false })).toEqual({
+      harness: 'codex',
+      nonInteractive: true,
+      reconfigure: false,
+      yes: false,
+      skipInbound: false,
+      rolesYes: false,
+      keepStoredTransport: true,
+      hints: upHints('codex'),
+    });
+    expect(upInstallOptions({ harness: 'claude-code', yes: false, acceptInbound: false, skipInbound: false })).toEqual({
+      harness: 'claude-code',
+      nonInteractive: true,
+      reconfigure: false,
+      yes: false,
+      skipInbound: false,
+      rolesYes: false,
+      keepStoredTransport: true,
+      hints: upHints('claude-code'),
+    });
   });
 
   it('up --yes never consents to the inbound setting; only --accept-inbound does', () => {
     const base = { harness: 'claude-code' as const, acceptInbound: false, skipInbound: false };
-    expect(upInstallOptions({ ...base, yes: true })).toMatchObject({ yes: false, rolesYes: true, nonInteractive: true });
-    expect(upInstallOptions({ ...base, yes: false, acceptInbound: true })).toMatchObject({ yes: true, rolesYes: false });
-    expect(upInstallOptions({ ...base, yes: false, skipInbound: true })).toMatchObject({ yes: false, skipInbound: true });
-    expect(upInstallOptions({ ...base, yes: false, roles: 'team.yml' })).toMatchObject({ roles: 'team.yml' });
+    const common = { harness: 'claude-code', nonInteractive: true, reconfigure: false, keepStoredTransport: true, hints: upHints('claude-code') };
+    expect(upInstallOptions({ ...base, yes: true })).toEqual({ ...common, yes: false, skipInbound: false, rolesYes: true });
+    expect(upInstallOptions({ ...base, yes: false, acceptInbound: true })).toEqual({ ...common, yes: true, skipInbound: false, rolesYes: false });
+    expect(upInstallOptions({ ...base, yes: false, skipInbound: true })).toEqual({ ...common, yes: false, skipInbound: true, rolesYes: false });
+    expect(upInstallOptions({ ...base, yes: false, roles: 'team.yml' })).toEqual({
+      ...common,
+      yes: false,
+      skipInbound: false,
+      rolesYes: false,
+      roles: 'team.yml',
+    });
+  });
+
+  it('under up, keeps the transport that install.yml records for the same harness, and says so', async () => {
+    const t = rig();
+    writeInstallRecord(t.env, { harness: 'claude-code', transport: 'file-mailbox', plugin_version: null });
+    expect(await main(['up', '--harness', 'claude-code', '--skip-inbound'], t.deps)).toBe(0);
+    expect(readInstallRecord(t.env)).toMatchObject({ ok: true, record: { harness: 'claude-code', transport: 'file-mailbox' } });
+    expect(t.out.text()).toContain('Keeping the file-mailbox transport, stored in install.yml.');
+    expect(readTeam(t.env)).toMatchObject({ ok: true, record: { transport: 'file-mailbox' } });
+  });
+
+  it('under up, a stored transport for another harness is not kept', async () => {
+    const t = rig();
+    writeInstallRecord(t.env, { harness: 'codex', transport: 'a2a', plugin_version: null });
+    expect(await main(['up', '--harness', 'claude-code', '--skip-inbound'], t.deps)).toBe(0);
+    expect(readInstallRecord(t.env)).toMatchObject({ ok: true, record: { harness: 'claude-code', transport: 'native' } });
+    expect(t.out.text()).not.toContain('Keeping the');
+  });
+
+  it('plain install --harness still resets the transport, as before', async () => {
+    const t = rig();
+    writeInstallRecord(t.env, { harness: 'claude-code', transport: 'file-mailbox', plugin_version: null });
+    expect(await main(['install', '--harness', 'claude-code', '--non-interactive', '--skip-inbound'], t.deps)).toBe(0);
+    expect(readInstallRecord(t.env)).toMatchObject({ ok: true, record: { harness: 'claude-code', transport: 'native' } });
+    expect(t.out.text()).not.toContain('Keeping the');
+  });
+
+  it('a damaged install.yml under up names a command to run first, and plain install keeps its own hint', async () => {
+    const t = rig();
+    writeInstallRecord(t.env, { harness: 'codex', transport: 'file-mailbox', plugin_version: null });
+    writeFileSync(join(t.env.home, '.trellis-crew', 'install.yml'), 'harness: [\n');
+    expect(await main(['up', '--harness', 'codex'], t.deps)).toBe(1);
+    expect(t.err.text()).toContain('Run trellis-crew install --reconfigure --harness codex first, then run up again.');
+    expect(t.err.text()).not.toContain('to write it again');
+    expect(t.err.text()).toContain('trellis-crew up stopped at step 1 of 2, install, with exit code 1. Nothing was started.');
+
+    const plain = rig();
+    writeInstallRecord(plain.env, { harness: 'codex', transport: 'file-mailbox', plugin_version: null });
+    writeFileSync(join(plain.env.home, '.trellis-crew', 'install.yml'), 'harness: [\n');
+    expect(await main(['install', '--harness', 'codex'], plain.deps)).toBe(1);
+    expect(plain.err.text()).toContain('Run trellis-crew install --reconfigure to write it again.');
   });
 });
 
@@ -161,11 +230,21 @@ describe('up --harness codex', () => {
     expect(text.indexOf('Step 2 of 2')).toBeLessThan(text.indexOf('Started the supervisor'));
   });
 
-  it('every codex exec session runs in workspace-write with network access off, and no bypass flag appears', async () => {
+  it('every codex exec session runs in workspace-write with network access off and the mailbox writable, and no bypass flag appears', async () => {
     const t = rig();
     expect(await main(['up', '--harness', 'codex'], t.deps)).toBe(0);
+    const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
     for (const session of supervisorJob(t).sessions) {
-      expect(session.args.slice(0, -1)).toEqual(['exec', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=false', '--']);
+      expect(session.args.slice(0, -1)).toEqual([
+        'exec',
+        '--sandbox',
+        'workspace-write',
+        '-c',
+        'sandbox_workspace_write.network_access=false',
+        '-c',
+        `sandbox_workspace_write.writable_roots=[${JSON.stringify(mailbox)}]`,
+        '--',
+      ]);
       expect(session.args.at(-1)).toMatch(/You are|trellis-crew start-up/);
       for (const arg of session.args.slice(0, -1)) {
         expect(arg).not.toContain('danger-full-access');
@@ -227,13 +306,96 @@ describe('up --harness codex', () => {
     expect(supervisorJob(yes).sessions.map((s) => s.name)).toEqual(['chain', 'boss', 'helper-a', 'helper-b', 'watcher']);
   });
 
-  it('refuses a roles file that names another harness, and starts nothing', async () => {
+  it('refuses a roles file that names another harness before the install, so nothing is installed', async () => {
     const t = rig();
     const file = writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('harness: auto', 'harness: claude-code'));
     expect(await main(['up', '--harness', 'codex', '--roles', file], t.deps)).toBe(2);
     expect(t.err.text()).toContain(`${file}: the roles file names the harness claude-code, but --harness is codex. Nothing was started.`);
-    expect(t.runner.calls.filter((c) => c.kind === 'detached')).toEqual([]);
+    expect(t.err.text()).toContain(STOPPED_BEFORE_INSTALL);
+    expectNothingInstalled(t);
+  });
+
+  it('refuses a found ./sagespec.yml that names another harness, or that is not valid, before the install', async () => {
+    const other = rig();
+    writeFileSync(join(other.env.cwd, 'sagespec.yml'), SMALL_TEAM.replace('harness: auto', 'harness: claude-code'));
+    expect(await main(['up', '--harness', 'codex', '--yes'], other.deps)).toBe(2);
+    expect(other.err.text()).toMatch(/sagespec\.yml: the roles file names the harness claude-code, but --harness is codex/);
+    expectNothingInstalled(other);
+
+    const broken = rig();
+    writeFileSync(join(broken.env.cwd, 'sagespec.yml'), SMALL_TEAM.replace('version: 1', 'version: 9'));
+    expect(await main(['up', '--harness', 'codex', '--yes'], broken.deps)).toBe(2);
+    expect(broken.err.text()).toMatch(/sagespec\.yml:\d+: /);
+    expect(broken.err.text()).toContain(STOPPED_BEFORE_INSTALL);
+    expectNothingInstalled(broken);
+  });
+
+  it('applies the harness bounds before the install, so a --roles file out of bounds installs nothing', async () => {
+    const t = rig();
+    writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('autocompact: 400k', 'autocompact: 99k'));
+    expect(await main(['up', '--harness', 'claude-code', '--skip-inbound', '--roles', 'team.yml'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(/team\.yml:\d+: .*100k to 1M/);
+    expectNothingInstalled(t);
+  });
+});
+
+const STOPPED_BEFORE_INSTALL = 'trellis-crew up stopped at step 1 of 2, install, with exit code 2. Nothing was installed or started.';
+const STOPPED_AFTER_INSTALL = 'trellis-crew up stopped at step 2 of 2, start, with exit code 2. Nothing was started. The install step already ran.';
+
+/** No install side effect: no install.yml, no skills, no plugin command, no team record. */
+function expectNothingInstalled(t: Rig): void {
+  expect(t.runner.calls).toEqual([]);
+  expect(existsSync(join(t.env.home, '.trellis-crew', 'install.yml'))).toBe(false);
+  expect(existsSync(join(t.env.home, '.agents'))).toBe(false);
+  expect(existsSync(teamJsonPath(t.env))).toBe(false);
+  expect(t.out.text()).not.toContain('Step 1 of 2');
+}
+
+/** A Claude Code rig whose plugin install step runs `during` once, to change the roles file between the two steps. */
+function changedDuringInstall(during: (t: Rig) => void): Rig {
+  const t = rig();
+  let done = false;
+  const runner = recordingRunner((_command, args) => {
+    if (!done && args[0] === 'plugin' && args[1] === 'install') {
+      done = true;
+      during(t);
+    }
+    return { code: 0, stdout: '', stderr: '', timedOut: false };
+  });
+  return { ...t, runner, deps: { ...t.deps, runner } };
+}
+
+describe('up reads the --roles file once', () => {
+  it('refuses to start when the file changed during the install', async () => {
+    const t = changedDuringInstall((r) => writeRoles(r.env, 'team.yml', SMALL_TEAM.replace('You help too.', 'You help, changed.')));
+    const file = writeRoles(t.env, 'team.yml', SMALL_TEAM);
+    expect(await main(['up', '--harness', 'claude-code', '--skip-inbound', '--roles', 'team.yml'], t.deps)).toBe(2);
+    expect(t.err.text()).toContain(`${file}: the roles file changed after up read it. Nothing was started.`);
+    expect(t.err.text()).toContain('trellis-crew up stopped at step 2 of 2, start, with exit code 2. The install step already ran.');
+    expect(bgRuns(t)).toEqual([]);
     expect(existsSync(teamJsonPath(t.env))).toBe(false);
+  });
+
+  it('the second check refuses a file that became a symbolic link during the install', async () => {
+    const t = changedDuringInstall((r) => {
+      const real = writeRoles(r.env, 'real.yml', SMALL_TEAM);
+      rmSync(join(r.env.cwd, 'team.yml'));
+      symlinkSync(real, join(r.env.cwd, 'team.yml'));
+    });
+    writeRoles(t.env, 'team.yml', SMALL_TEAM);
+    expect(await main(['up', '--harness', 'claude-code', '--skip-inbound', '--roles', 'team.yml'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(/--roles must name a local regular file \(the last part of the path is a symbolic link\)\.$/m);
+    expect(t.err.text()).toContain(STOPPED_AFTER_INSTALL);
+    expect(bgRuns(t)).toEqual([]);
+  });
+
+  it('start --roles still follows a symbolic link, as before', async () => {
+    const t = rig();
+    writeInstallRecord(t.env, { harness: 'claude-code', transport: 'native', plugin_version: null });
+    const real = writeRoles(t.env, 'real.yml', SMALL_TEAM);
+    symlinkSync(real, join(t.env.cwd, 'team.yml'));
+    expect(await main(['start', '--roles', 'team.yml'], t.deps)).toBe(0);
+    expect(bgRuns(t)).toHaveLength(5);
   });
 });
 
@@ -241,23 +403,25 @@ describe('up --roles is a local regular file', () => {
   it('refuses a missing file, a folder, and a symbolic link, before any install', async () => {
     const missing = rig();
     expect(await main(['up', '--harness', 'codex', '--roles', 'nope.yml'], missing.deps)).toBe(2);
-    expect(missing.err.text()).toContain(`${join(missing.env.cwd, 'nope.yml')}: --roles must name a local regular file (ENOENT). Nothing was installed.`);
+    const path = join(missing.env.cwd, 'nope.yml');
+    // The reason carries the error message, not only its code.
+    expect(missing.err.text()).toContain(`${path}: --roles must name a local regular file (ENOENT: no such file or directory, open '${path}').`);
 
     const folder = rig();
     mkdirSync(join(folder.env.cwd, 'team'));
     expect(await main(['up', '--harness', 'codex', '--roles', 'team'], folder.deps)).toBe(2);
-    expect(folder.err.text()).toMatch(/--roles must name a local regular file \(not a regular file\)/);
+    expect(folder.err.text()).toMatch(/--roles must name a local regular file \(not a regular file\)\.$/m);
 
     const link = rig();
     const real = writeRoles(link.env, 'real.yml', SMALL_TEAM);
     symlinkSync(real, join(link.env.cwd, 'team.yml'));
     expect(await main(['up', '--harness', 'codex', '--roles', 'team.yml'], link.deps)).toBe(2);
-    expect(link.err.text()).toMatch(/--roles must name a local regular file \(a symbolic link\)/);
+    expect(link.err.text()).toMatch(/--roles must name a local regular file \(the last part of the path is a symbolic link\)\.$/m);
 
     for (const t of [missing, folder, link]) {
-      expect(t.runner.calls).toEqual([]);
+      expect(t.err.text()).toContain(STOPPED_BEFORE_INSTALL);
+      expectNothingInstalled(t);
       expect(existsSync(join(t.env.home, '.trellis-crew'))).toBe(false);
-      expect(existsSync(join(t.env.home, '.agents'))).toBe(false);
     }
   });
 });

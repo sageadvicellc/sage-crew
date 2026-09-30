@@ -17,6 +17,8 @@ export interface AdapterContext {
   binaryPath: string;
   /** Prints one line for the operator. */
   out: (line: string) => void;
+  /** The absolute file mailbox folder, for the file-mailbox transport. */
+  mailbox?: string;
 }
 
 export type LaunchOutcome = { ok: true; entry: TeamEntry } | { ok: false; message: string };
