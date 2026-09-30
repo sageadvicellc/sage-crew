@@ -45,8 +45,11 @@ describe('Codex CLI', () => {
     expect(job.supervisorPid).toBeUndefined();
     const mainJob = job.sessions.find((s) => s.name === 'main');
     expect(mainJob?.args[0]).toBe('exec');
-    expect(mainJob?.args).toHaveLength(2);
-    expect(mainJob?.args[1]).toMatch(/You are main, the lead\.[\s\S]*file mailbox at/);
+    // exec, then -c developer_instructions=<the role skill>, then the kickoff.
+    expect(mainJob?.args).toHaveLength(4);
+    expect(mainJob?.args[1]).toBe('-c');
+    expect(mainJob?.args[2]).toMatch(/^developer_instructions="/);
+    expect(mainJob?.args[3]).toMatch(/You are main, the lead\.[\s\S]*file mailbox at/);
     expect(t.out.text()).toMatch(/supervisor/);
   });
 
@@ -57,7 +60,7 @@ describe('Codex CLI', () => {
     if (launchAll === undefined) throw new Error('no launchAll');
     chmodSync(join(t.env.home, '.trellis-crew'), 0o755);
     const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {} };
-    await expect(launchAll([{ name: 'main', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'))).rejects.toThrow(
+    await expect(launchAll([{ name: 'main', role: 'lead', kickoff: 'k', flagArgs: [] }], ctx, join(t.env.home, 'team.json'))).rejects.toThrow(
       /open to other users/,
     );
     expect(t.runner.calls).toEqual([]);

@@ -117,6 +117,12 @@ that you set and prints a warning that names the session and the field.
 - Codex CLI sessions start under one supervisor process. `start` returns
   at once. The supervisor starts each `codex exec` process and records
   its process ID. `stop` ends the supervisor and each session.
+
+  Each Codex session gets its role's default skill, such as
+  `department-lead` for a lead, through `developer_instructions`. Codex
+  adds these to its own instructions and does not replace them. When a
+  session starts, the CLI reads the skill from this package. It never
+  reads role text from your roles file.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.

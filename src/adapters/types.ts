@@ -1,6 +1,6 @@
 import type { Env } from '../env.ts';
 import type { InboundTarget } from '../settings/inbound.ts';
-import type { HarnessId } from '../roles/schema.ts';
+import type { HarnessId, Role } from '../roles/schema.ts';
 import type { Runner } from '../runner.ts';
 import type { TeamEntry } from '../store/team-json.ts';
 
@@ -33,8 +33,8 @@ export interface Adapter {
   displayName: string;
   /** The verified flag for each launch field. A field with no flag is ignored with a warning. */
   flags: Partial<Record<LaunchField, string>>;
-  /** Starts one named session with its kickoff as the first prompt. */
-  launch(name: string, kickoff: string, flagArgs: readonly string[], ctx: AdapterContext): Promise<LaunchOutcome>;
+  /** Starts one named session with its kickoff as the first prompt. `role` is the session's role in the roles file. */
+  launch(name: string, kickoff: string, flagArgs: readonly string[], ctx: AdapterContext, role: Role): Promise<LaunchOutcome>;
   /** The line stop prints for a recorded session that holds no local process. */
   noProcessNote(entry: TeamEntry): string;
   /** Installs the plugin the way the harness documents. Unset: not built yet. */
@@ -56,6 +56,7 @@ export interface Adapter {
 /** One session for a supervisor to start. */
 export interface LaunchItem {
   name: string;
+  role: Role;
   kickoff: string;
   flagArgs: readonly string[];
 }

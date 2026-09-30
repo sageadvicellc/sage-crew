@@ -4,13 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { stateDir } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
 import { ensurePrivateFolder } from '../fs-private.ts';
+import type { Role } from '../roles/schema.ts';
+import { packageSkillsDir, roleInstructionsArgs } from './codex-instructions.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
-/** The skill folders this package carries, one per skill. */
-export function packageSkillsDir(): string {
-  return fileURLToPath(new URL('../../skills/', import.meta.url));
-}
+export { packageSkillsDir };
 
 /** The folder Codex CLI reads user skills from. */
 export function codexSkillsDir(home: string): string {
@@ -23,9 +22,13 @@ export function supervisorScriptPath(): string {
   return fileURLToPath(new URL(`./codex-supervisor${ext}`, import.meta.url));
 }
 
-/** The arguments for one `codex exec` session. Codex documents no flag to name a session, so the kickoff names it. */
-export function codexExecArgs(flagArgs: readonly string[], kickoff: string): string[] {
-  return ['exec', ...flagArgs, kickoff];
+/**
+ * The arguments for one `codex exec` session. Codex documents no flag to name a session, so the kickoff names it.
+ * The role's instructions sit just before the prompt. Throws RoleInstructionsError when the role skill cannot be read.
+ * Merge note: open PR 24 moves this function into codex-args.ts; carry the role instructions over there.
+ */
+export function codexExecArgs(flagArgs: readonly string[], kickoff: string, role: Role): string[] {
+  return ['exec', ...flagArgs, ...roleInstructionsArgs(role), kickoff];
 }
 
 /**
@@ -65,9 +68,9 @@ export const codexAdapter: Adapter = {
   flags: {},
 
   /** Starts one session on its own, for respawn. */
-  async launch(name, kickoff, flagArgs, ctx) {
+  async launch(name, kickoff, flagArgs, ctx, role) {
     try {
-      const { pid } = await ctx.runner.spawnDetached(ctx.binaryPath, codexExecArgs(flagArgs, kickoff), {
+      const { pid } = await ctx.runner.spawnDetached(ctx.binaryPath, codexExecArgs(flagArgs, kickoff, role), {
         env: ctx.env.vars,
         cwd: ctx.env.cwd,
       });
@@ -78,12 +81,13 @@ export const codexAdapter: Adapter = {
   },
 
   async launchAll(items, ctx, teamPath) {
-    const job: SupervisorJob = {
-      binary: ctx.binaryPath,
-      cwd: ctx.env.cwd,
-      teamPath,
-      sessions: items.map((item) => ({ name: item.name, args: codexExecArgs(item.flagArgs, item.kickoff) })),
-    };
+    let sessions: SupervisorJob['sessions'];
+    try {
+      sessions = items.map((item) => ({ name: item.name, args: codexExecArgs(item.flagArgs, item.kickoff, item.role) }));
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+    const job: SupervisorJob = { binary: ctx.binaryPath, cwd: ctx.env.cwd, teamPath, sessions };
     const dir = stateDir(ctx.env);
     ensurePrivateFolder(dir);
     const jobPath = join(dir, 'codex-supervisor.json');
