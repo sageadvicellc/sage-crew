@@ -148,9 +148,14 @@ machine reads that folder. The CLI never sets `CODEX_HOME`.
 
 Run the command at the top of a git worktree. For any other folder, the
 command stops and names the step. It also stops for your home folder
-and for `/`. Under the workspace-write sandbox, Codex keeps
-`<writable_root>/.agents` read-only, so a Codex session cannot edit
-the copies.
+and for `/`. The CLI ignores any `GIT_` variable in your shell for its
+git steps, so it always reads the repository in that folder.
+
+Under the workspace-write sandbox, "`<writable_root>/.agents` is
+protected as read-only when it exists as a directory". The Codex
+approvals and security page says so
+(https://learn.chatgpt.com/docs/agent-approvals-security, read
+2026-09-30). So a Codex session cannot edit the copies.
 
 The export keeps git clean, and it changes no tracked file:
 
@@ -164,8 +169,18 @@ The export keeps git clean, and it changes no tracked file:
   lines, and it warns about any other line. A block with no end line,
   or two blocks, stops the install. It also stops for a link at
   `.git/info` or at the exclude file.
+- The CLI adds the lines before it copies a skill. It takes a line out
+  only after the skill's folder is gone.
+- While it edits the exclude file, the CLI holds a lock file beside it,
+  `<exclude>.trellis-crew.lock`. If that lock file is already there, the
+  install stops and names it. If no other trellis-crew run is going,
+  remove the lock file, then run the command again.
+- In a linked worktree, git reads the exclude file of the main
+  repository, `<common git folder>/info/exclude`. So every worktree of
+  that repository shares one block.
 - It never edits `.gitignore`.
-- If git tracks any file in `.agents/skills/<skill>/`, the CLI treats
+- If git tracks any file in `.agents/skills/<skill>/`, in any letter
+  case, the CLI treats
   that folder as tracked in git. The install then stops and changes
   nothing.
 

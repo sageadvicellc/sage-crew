@@ -160,12 +160,13 @@ function recordingFs(base: ExportFs = nodeExportFs): { fs: ExportFs; paths: stri
   return { fs, paths };
 }
 
-/** Fails on any recorded path outside `<top>/.agents/skills`, except `<top>/.agents` itself and the one exclude file. */
+/** Fails on any recorded path outside `<top>/.agents/skills`, except `<top>/.agents` itself, the one exclude file, and its lock file. */
 function expectOnlyProjectWrites(paths: readonly string[], top: string, exclude: string): void {
   const skills = join(top, '.agents', 'skills');
   expect(paths.length).toBeGreaterThan(0);
   for (const path of paths) {
-    const allowed = path === join(top, '.agents') || path === skills || path.startsWith(skills + sep) || path === exclude;
+    const allowed =
+      path === join(top, '.agents') || path === skills || path.startsWith(skills + sep) || path === exclude || path === `${exclude}.trellis-crew.lock`;
     expect(allowed, path).toBe(true);
     expect(path.split(sep), path).not.toContain('..');
   }
@@ -1188,6 +1189,227 @@ function sourceFiles(dir: string): string[] {
     .map((rel) => join(dir, rel))
     .filter((abs) => lstatSync(abs).isFile());
 }
+
+/** A folder standing in for a home folder that a racer points `.agents` at. It holds `skills/`, so a write that follows the link would land. */
+function fakeHome(): string {
+  const dir = makeFixtureHome();
+  mkdirSync(join(dir, 'skills'));
+  return dir;
+}
+
+describe('a folder swapped for a link during the export', () => {
+  it('.agents created as a link after the survey stops the export before any write lands outside the top', async () => {
+    const p = project();
+    const racer = fakeHome();
+    const hooked: ExportFs = {
+      ...nodeExportFs,
+      mkdir: (path, m) => {
+        // Another process wins the race and makes .agents a link to "home".
+        if (path === join(p.top, '.agents')) symlinkSync(racer, path);
+        else nodeExportFs.mkdir(path, m);
+      },
+    };
+    const { fs, paths } = recordingFs(hooked);
+    const result = await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha', 'beta']), fs });
+    expect(!result.ok && result.message).toMatch(/\.agents is a symbolic link/);
+    expect(readdirSync(join(racer, 'skills'))).toEqual([]);
+    expect(readdirSync(racer)).toEqual(['skills']);
+    expect(paths.filter((path) => path !== join(p.top, '.agents'))).toEqual([]);
+  });
+
+  it('.agents swapped for a link between two skills stops the export before the second skill lands outside the top', async () => {
+    const p = project();
+    const racer = fakeHome();
+    const hooked: ExportFs = {
+      ...nodeExportFs,
+      rename: (from, to) => {
+        nodeExportFs.rename(from, to);
+        if (to === join(p.target, 'alpha')) {
+          // After the first skill is in place, a racer moves .agents away and links it to "home".
+          renameSync(join(p.top, '.agents'), join(p.top, 'agents-moved'));
+          symlinkSync(racer, join(p.top, '.agents'));
+        }
+      },
+    };
+    const result = await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha', 'beta']), fs: hooked });
+    expect(!result.ok && result.message).toMatch(/\.agents changed during the export/);
+    expect(!result.ok && result.message).toMatch(/Already copied: alpha/);
+    expect(readdirSync(join(racer, 'skills'))).toEqual([]);
+    expect(readdirSync(racer)).toEqual(['skills']);
+  });
+
+  it('.agents/skills swapped for another real folder is caught by its device and inode', async () => {
+    const p = project();
+    const hooked: ExportFs = {
+      ...nodeExportFs,
+      rename: (from, to) => {
+        nodeExportFs.rename(from, to);
+        if (to === join(p.target, 'alpha')) {
+          renameSync(p.target, join(p.top, 'skills-moved'));
+          mkdirSync(p.target);
+        }
+      },
+    };
+    const result = await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha', 'beta']), fs: hooked });
+    expect(!result.ok && result.message).toMatch(/\.agents\/skills changed during the export/);
+    expect(readdirSync(p.target)).toEqual([]);
+  });
+});
+
+describe('git variables in the parent environment', () => {
+  it('are removed, so the top check, the tracked check, and the exclude path see the real repository', async () => {
+    const other = makeFixtureRepo();
+    other.write('README.md', 'other\n');
+    other.commit('other');
+    const otherExclude = readFileSync(join(other.root, '.git', 'info', 'exclude'), 'utf8');
+    const gitVars = {
+      GIT_DIR: join(other.root, '.git'),
+      GIT_WORK_TREE: other.root,
+      GIT_INDEX_FILE: join(other.root, '.git', 'index'),
+      GIT_COMMON_DIR: join(other.root, '.git'),
+    };
+    const withVars = (repo: FixtureRepo): ExportContext => {
+      const home = makeFixtureHome();
+      const env = makeTestEnv({ home, cwd: repo.root, vars: { HOME: home, PATH: process.env.PATH, ...gitVars } });
+      return { env, runner: gitRunner(), out: quietOut };
+    };
+
+    const clean = makeFixtureRepo();
+    const ctx = withVars(clean);
+    expect(await projectTop(ctx.env, ctx.runner)).toEqual({ ok: true, top: clean.root });
+    expect(await exportSkills(ctx, { root: standInPackage(TWO, ['alpha']) })).toEqual({ ok: true });
+    expect(readFileSync(join(clean.root, '.git', 'info', 'exclude'), 'utf8')).toContain('/.agents/skills/alpha/');
+    expect(readFileSync(join(other.root, '.git', 'info', 'exclude'), 'utf8')).toBe(otherExclude);
+
+    const tracked = makeFixtureRepo();
+    tracked.write('.agents/skills/alpha/SKILL.md', 'committed\n');
+    tracked.commit('track a skill');
+    const result = await exportSkills(withVars(tracked), { root: standInPackage(TWO, ['alpha']) });
+    expect(!result.ok && result.message).toMatch(/alpha \(tracked in git\)/);
+  });
+});
+
+describe('fix round 1: tracked, modes, exclude order, and the lock', () => {
+  it('a tracked folder whose name differs in letter case counts as tracked', async () => {
+    const p = project();
+    p.repo.write('.agents/skills/Alpha/SKILL.md', 'committed\n');
+    p.repo.commit('track a skill in another case');
+    const result = await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha']) });
+    expect(!result.ok && result.message).toMatch(/alpha \(tracked in git\)/);
+    expect(readFileSync(join(p.target, 'Alpha', 'SKILL.md'), 'utf8')).toBe('committed\n');
+  });
+
+  it('a tracked leftover temp folder is never removed, and is reported', async () => {
+    const p = project();
+    const leftover = join(p.target, '.trellis-crew-alpha-abc123');
+    writeTree(leftover, { 'SKILL.md': 'staged\n' });
+    writeMarker(leftover, 'alpha');
+    p.repo.commit('track a leftover');
+    const root = standInPackage(TWO, ['alpha']);
+    const check = await checkSkills(p.ctx(), root);
+    expect(check).toMatchObject({ ok: true, leftovers: [], strays: [leftover] });
+    const lines: string[] = [];
+    expect(await exportSkills(p.ctx((l) => lines.push(l)), { root })).toEqual({ ok: true });
+    expect(existsSync(join(leftover, 'SKILL.md'))).toBe(true);
+    expect(lines.join('\n')).toMatch(new RegExp(`warning: .*${basename(leftover)}.*left alone`));
+  });
+
+  it('copied folders always get the owner write bit, so a later run can replace them', async () => {
+    const root = standInPackage({ alpha: { 'SKILL.md': 'a\n', 'refs/notes.md': 'n\n' } }, ['alpha']);
+    const source = join(root, 'skills', 'alpha');
+    chmodSync(join(source, 'refs'), 0o555);
+    chmodSync(source, 0o555);
+    try {
+      const p = project();
+      expect(await exportSkills(p.ctx(), { root })).toEqual({ ok: true });
+      expect(mode(join(p.target, 'alpha')) & 0o200).toBe(0o200);
+      expect(mode(join(p.target, 'alpha', 'refs')) & 0o200).toBe(0o200);
+      expect(await checkSkills(p.ctx(), root)).toMatchObject({ ok: true, skills: [{ state: 'in-step' }] });
+      const lines: string[] = [];
+      const newer = standInPackage({ alpha: { 'SKILL.md': 'a v2\n' } }, ['alpha']);
+      expect(await exportSkills(p.ctx((l) => lines.push(l)), { root: newer })).toEqual({ ok: true });
+      expect(lines.join('\n')).not.toMatch(/warning/);
+      expect(dotEntries(p.target)).toEqual([]);
+      expect(readFileSync(join(p.target, 'alpha', 'SKILL.md'), 'utf8')).toBe('a v2\n');
+    } finally {
+      chmodSync(source, 0o755);
+      chmodSync(join(source, 'refs'), 0o755);
+    }
+  });
+
+  it('the exclude lines are added before the first copy, so a run that fails there still leaves them, and a later run succeeds', async () => {
+    const p = project();
+    const root = standInPackage(TWO, ['alpha', 'beta']);
+    const failing: ExportFs = {
+      ...nodeExportFs,
+      mkdtemp: () => {
+        throw new Error('copy refused');
+      },
+    };
+    const result = await exportSkills(p.ctx(), { root, fs: failing });
+    expect(!result.ok && result.message).toMatch(/copy refused/);
+    expect(readFileSync(p.exclude, 'utf8')).toContain(block('/.agents/skills/alpha/', '/.agents/skills/beta/'));
+    expect(existsSync(join(p.target, 'alpha'))).toBe(false);
+    expect(await exportSkills(p.ctx(), { root })).toEqual({ ok: true });
+    expect(p.repo.git('status', '--porcelain')).toBe('');
+  });
+
+  it('a stale removal takes the exclude line out only after the folder is gone', async () => {
+    const p = project();
+    expect(await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha', 'beta']) })).toEqual({ ok: true });
+    const events: string[] = [];
+    const watching: ExportFs = {
+      ...nodeExportFs,
+      remove: (path) => {
+        if (path === join(p.target, 'beta')) events.push(`remove beta, exclude has beta: ${readFileSync(p.exclude, 'utf8').includes('/.agents/skills/beta/')}`);
+        nodeExportFs.remove(path);
+      },
+      writeAtomic: (path, text, m) => {
+        if (path === p.exclude) events.push(`exclude write, has beta: ${text.includes('/.agents/skills/beta/')}`);
+        nodeExportFs.writeAtomic(path, text, m);
+      },
+    };
+    expect(await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha']), fs: watching })).toEqual({ ok: true });
+    expect(events).toEqual(['remove beta, exclude has beta: true', 'exclude write, has beta: false']);
+  });
+
+  it('a held lock on the exclude file stops the export with a named step, and nothing changes', async () => {
+    const p = project();
+    const lock = `${p.exclude}.trellis-crew.lock`;
+    writeFileSync(lock, 'held\n');
+    const exclude = readFileSync(p.exclude, 'utf8');
+    const result = await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha']) });
+    expect(!result.ok && result.message).toContain(lock);
+    expect(!result.ok && result.message).toMatch(/lock/);
+    expect(readFileSync(lock, 'utf8')).toBe('held\n');
+    expect(readFileSync(p.exclude, 'utf8')).toBe(exclude);
+    expect(existsSync(p.target)).toBe(false);
+  });
+
+  it('the lock is taken with an exclusive create and removed after each exclude edit', async () => {
+    const p = project();
+    const lock = `${p.exclude}.trellis-crew.lock`;
+    const events: string[] = [];
+    const watching: ExportFs = {
+      ...nodeExportFs,
+      writeFile: (path, text) => {
+        if (path === lock) events.push('lock');
+        nodeExportFs.writeFile(path, text);
+      },
+      writeAtomic: (path, text, m) => {
+        if (path === p.exclude) events.push(`write, lock held: ${existsSync(lock)}`);
+        nodeExportFs.writeAtomic(path, text, m);
+      },
+      remove: (path) => {
+        if (path === lock) events.push('unlock');
+        nodeExportFs.remove(path);
+      },
+    };
+    expect(await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha']), fs: watching })).toEqual({ ok: true });
+    expect(events.slice(0, 3)).toEqual(['lock', 'write, lock held: true', 'unlock']);
+    expect(existsSync(lock)).toBe(false);
+  });
+});
 
 describe('CODEX_HOME', () => {
   it('the heuristic scan finds an assignment or an env key, and passes a read', () => {

@@ -17,7 +17,7 @@ import {
   writeFileSync,
   type Stats,
 } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Env } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
@@ -30,10 +30,14 @@ import type { PluginCheck, PluginOutcome } from './types.ts';
  * Codex CLI reads skills from `$CWD/.agents/skills`, `$CWD/../.agents/skills`,
  * `$REPO_ROOT/.agents/skills`, `$HOME/.agents/skills`, `/etc/codex/skills`,
  * and then its built-in skills, as the Codex skills page says
- * (https://learn.chatgpt.com/docs/build-skills, read 2026-09-30). The export writes only `<worktree top>/.agents/skills`. It
- * never writes `~/.agents/skills`, which every Codex session on the machine
- * reads. Under the workspace-write sandbox, Codex keeps
- * `<writable_root>/.agents` read-only, so a session cannot edit the copies.
+ * (https://learn.chatgpt.com/docs/build-skills, read 2026-09-30). The
+ * export writes only `<worktree top>/.agents/skills`. It never writes
+ * `~/.agents/skills`, which every Codex session on the machine reads.
+ * Under the workspace-write sandbox, "`<writable_root>/.agents` is
+ * protected as read-only when it exists as a directory", as the Codex
+ * approvals and security page says
+ * (https://learn.chatgpt.com/docs/agent-approvals-security, read
+ * 2026-09-30). So a Codex session cannot edit the copies.
  *
  * The approved skills are the `skills` list in the package's plugin
  * manifest. Each exported folder holds a marker file with the tree hash of
@@ -58,6 +62,8 @@ const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 /** The mode bits a copy keeps and the hash covers: no group or other write, no special bits. */
 const MODE_MASK = 0o755;
+/** The owner write bit, which a copied folder always keeps, so a later run can rename and remove it. */
+const OWNER_WRITE = 0o200;
 /** The shape of a temp folder: the prefix, a skill name, the six characters mkdtemp adds, and `-old` for a swapped-out copy. */
 const TEMP_SHAPE = /^\.trellis-crew-(.+)-[A-Za-z0-9]{6}(?:-old)?$/;
 const EXCLUDE_LINE = /^\/\.agents\/skills\/([^/]+)\/$/;
@@ -92,6 +98,12 @@ function lstatOrUndefined(path: string): Stats | undefined {
 
 const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
+/** The mode a copy gets: mode & 0o755, and the owner write bit for a folder. */
+function copyMode(stat: Stats): number {
+  const bits = stat.mode & MODE_MASK;
+  return stat.isDirectory() ? bits | OWNER_WRITE : bits;
+}
+
 const isUnder = (path: string, folder: string): boolean => path === folder || path.startsWith(folder.endsWith(sep) ? folder : folder + sep);
 
 /** Where a command is run, and what it may run. The export and the check take this. */
@@ -103,8 +115,19 @@ export interface ExportContext {
 
 type Git = (args: readonly string[]) => Promise<RunResult>;
 
+/**
+ * The environment without any GIT_* variable. A GIT_DIR, GIT_WORK_TREE,
+ * GIT_INDEX_FILE, or GIT_COMMON_DIR from the parent would point these git
+ * calls at another repository. It mirrors `withoutGitVars` in
+ * trellis-crew#24.
+ */
+export function withoutGitVars(vars: Readonly<Record<string, string | undefined>>): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(vars).filter(([key]) => !key.startsWith('GIT_')));
+}
+
 function gitIn(ctx: Pick<ExportContext, 'env' | 'runner'>, cwd: string): Git {
-  return (args) => ctx.runner.run('git', args, { cwd, env: ctx.env.vars, timeoutMs: GIT_TIMEOUT_MS });
+  const env = withoutGitVars(ctx.env.vars);
+  return (args) => ctx.runner.run('git', args, { cwd, env, timeoutMs: GIT_TIMEOUT_MS });
 }
 
 function gitFailure(what: string, result: RunResult): string {
@@ -119,8 +142,8 @@ export type TopResult = { ok: true; top: string } | { ok: false; message: string
  * after realpath must equal `git rev-parse --show-toplevel` after realpath,
  * and it is never the home folder or `/`.
  *
- * This is a small local guard. It should merge with the worktree guard in
- * codex-guard.ts from the open pull request 24 once that lands.
+ * This is a small local guard. It should merge with `workdirProblem` in
+ * `src/adapters/codex-guard.ts` (trellis-crew#24) once that lands.
  */
 export async function projectTop(env: Env, runner: Runner): Promise<TopResult> {
   let folder: string;
@@ -230,13 +253,15 @@ function walk(dir: string): Entry[] {
 
 /**
  * SHA-256 over a skill folder: each relative path in sorted order, its
- * type, its mode & 0o755, and each file's length and bytes. The marker
- * file is left out, so a copy hashes the same as its source.
+ * type, its mode, and each file's length and bytes. The mode is the copy's
+ * mode: mode & 0o755 for a file, and that with the owner write bit for a
+ * folder. The marker file is left out, so a copy hashes the same as its
+ * source.
  */
 export function treeHash(dir: string): string {
   const hash = createHash('sha256');
   for (const entry of walk(dir)) {
-    const mode = (entry.stat.mode & MODE_MASK).toString(8);
+    const mode = copyMode(entry.stat).toString(8);
     if (entry.stat.isDirectory()) {
       hash.update(`dir\0${mode}\0${entry.rel}\0`);
       continue;
@@ -468,6 +493,87 @@ export const nodeExportFs: ExportFs = {
   remove: (path) => rmSync(path, { recursive: true, force: true }),
 };
 
+/** A folder on the way to the skills, fixed by its device and inode once the export has made or found it. */
+interface Pin {
+  path: string;
+  dev: bigint;
+  ino: bigint;
+}
+
+/** Checks that `path` is a real folder that resolves to `expected`, and records its device and inode. */
+function pinFolder(path: string, expected: string): Pin {
+  const stat = lstatSync(path, { bigint: true });
+  if (stat.isSymbolicLink()) throw new Error(`${path} is a symbolic link, which is not followed`);
+  if (!stat.isDirectory()) throw new Error(`${path} is not a folder`);
+  const real = realpathSync(path);
+  if (real !== expected) throw new Error(`${path} resolves to ${real}, not ${expected}`);
+  return { path, dev: stat.dev, ino: stat.ino };
+}
+
+/** Throws when a pinned folder is gone, is now a link, or is another folder than the one pinned. */
+function checkPins(pins: readonly Pin[]): void {
+  for (const pin of pins) {
+    let stat;
+    try {
+      stat = lstatSync(pin.path, { bigint: true });
+    } catch {
+      stat = undefined;
+    }
+    if (stat === undefined || stat.isSymbolicLink() || !stat.isDirectory() || stat.dev !== pin.dev || stat.ino !== pin.ino) {
+      throw new Error(`${pin.path} changed during the export, so the export stopped`);
+    }
+  }
+}
+
+/**
+ * An ExportFs that checks every pin before each operation. A folder that a
+ * racer swaps for a link, or for another folder, stops the export before
+ * the next write can land through it.
+ */
+function pinnedFs(fsx: ExportFs, pins: readonly Pin[]): ExportFs {
+  return {
+    mkdir: (path, mode) => (checkPins(pins), fsx.mkdir(path, mode)),
+    mkdtemp: (prefix) => (checkPins(pins), fsx.mkdtemp(prefix)),
+    copyFile: (from, to) => (checkPins(pins), fsx.copyFile(from, to)),
+    writeFile: (path, text) => (checkPins(pins), fsx.writeFile(path, text)),
+    writeAtomic: (path, text, mode) => (checkPins(pins), fsx.writeAtomic(path, text, mode)),
+    chmod: (path, mode) => (checkPins(pins), fsx.chmod(path, mode)),
+    rename: (from, to) => (checkPins(pins), fsx.rename(from, to)),
+    remove: (path) => (checkPins(pins), fsx.remove(path)),
+  };
+}
+
+/** The lock file beside the exclude file, in the same checked folder. */
+export function excludeLockPath(excludePath: string): string {
+  return `${excludePath}.trellis-crew.lock`;
+}
+
+function lockHeld(lock: string): Error {
+  return new Error(`the git exclude file is locked by ${lock}. If no other trellis-crew run is going, remove that lock file, then run the command again`);
+}
+
+/** Runs `edit` while holding the exclude lock, which is made with an exclusive create and removed after. */
+function withExcludeLock(excludePath: string, fsx: ExportFs, edit: () => void): void {
+  const lock = excludeLockPath(excludePath);
+  try {
+    fsx.writeFile(lock, `${process.pid}\n`);
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') throw lockHeld(lock);
+    throw error;
+  }
+  let failed = true;
+  try {
+    edit();
+    failed = false;
+  } finally {
+    try {
+      fsx.remove(lock);
+    } catch (error) {
+      if (!failed) throw new Error(`the exclude lock ${lock} could not be removed (${describeError(error)})`, { cause: error });
+    }
+  }
+}
+
 /** An error for a cleanup that failed after `first`: it keeps `first` as the cause and names the path. */
 function withCleanup(first: unknown, path: string, cleanup: unknown): Error {
   return new Error(`${describeError(first)}. The temp folder ${path} could not be removed (${describeError(cleanup)})`, {
@@ -475,7 +581,7 @@ function withCleanup(first: unknown, path: string, cleanup: unknown): Error {
   });
 }
 
-/** Copies a tree of plain folders and files. Folders are 0o700 while it copies; the source modes are applied last, deepest first. */
+/** Copies a tree of plain folders and files. Folders are 0o700 while it copies; the copy modes are applied last, deepest first. */
 function copyTree(source: string, dest: string, fsx: ExportFs): void {
   const entries = walk(source);
   for (const entry of entries) {
@@ -484,7 +590,7 @@ function copyTree(source: string, dest: string, fsx: ExportFs): void {
     else fsx.copyFile(entry.abs, to);
   }
   const deepestFirst = [...entries].sort((a, b) => b.rel.split('/').length - a.rel.split('/').length);
-  for (const entry of deepestFirst) fsx.chmod(join(dest, ...entry.rel.split('/')), entry.stat.mode & MODE_MASK);
+  for (const entry of deepestFirst) fsx.chmod(join(dest, ...entry.rel.split('/')), copyMode(entry.stat));
 }
 
 function markerText(skill: string, sha256: string): string {
@@ -498,7 +604,7 @@ function stage(skillsDir: string, skill: ApprovedSkill, sourceHash: string, fsx:
     copyTree(skill.source, temp, fsx);
     if (treeHash(temp) !== sourceHash) throw new Error(`the copy of ${skill.name} does not match its source`);
     fsx.writeFile(join(temp, SKILL_MARKER), markerText(skill.name, sourceHash));
-    fsx.chmod(temp, lstatSync(skill.source).mode & MODE_MASK);
+    fsx.chmod(temp, copyMode(lstatSync(skill.source)));
     return temp;
   } catch (error) {
     try {
@@ -679,8 +785,9 @@ async function survey(ctx: Pick<ExportContext, 'env' | 'runner'>, root: string):
     const refused = refusedFolder(folder);
     if (refused !== undefined) return { ok: false, message: refused };
   }
+  // Case-blind, since a case-blind file system shows `Alpha/` at `alpha/`.
   const tracked = async (name: string): Promise<boolean> => {
-    const listed = await git(['ls-files', '-z', '--', `.agents/skills/${name}`]);
+    const listed = await git(['ls-files', '-z', '--', `:(icase).agents/skills/${name}`]);
     if (listed.code !== 0) throw new Error(gitFailure(`git ls-files for ${name}`, listed));
     return listed.stdout !== '';
   };
@@ -692,7 +799,12 @@ async function survey(ctx: Pick<ExportContext, 'env' | 'runner'>, root: string):
   }
   const others: (Other & { tracked: boolean })[] = [];
   for (const other of otherFolders(skillsDir, approved.skills, root)) others.push({ ...other, tracked: await tracked(other.name) });
-  return { ok: true, survey: { top, skillsDir, approved: approved.skills, targets, others, leftovers: leftoverFolders(skillsDir, approved.skills), git } };
+  // A tracked leftover is never removed: it is reported and left alone.
+  const shaped = leftoverFolders(skillsDir, approved.skills);
+  const leftovers: Leftovers = { removable: [], strays: [...shaped.strays] };
+  for (const path of shaped.removable) (await tracked(basename(path)) ? leftovers.strays : leftovers.removable).push(path);
+  leftovers.strays.sort();
+  return { ok: true, survey: { top, skillsDir, approved: approved.skills, targets, others, leftovers, git } };
 }
 
 /* ---------- The export ---------- */
@@ -751,6 +863,7 @@ export async function exportSkills(ctx: ExportContext, options: ExportOptions = 
     const known = [...plan.approved.map((s) => s.name), ...plan.others.map((o) => o.name)];
     const trial = updateExcludeText(exclude.text, { add: [], remove: [], known });
     if (!trial.ok) return fail(`the git exclude file ${exclude.path}: ${trial.message}, so nothing was changed`);
+    if (lstatOrUndefined(excludeLockPath(exclude.path)) !== undefined) return fail(`${lockHeld(excludeLockPath(exclude.path)).message}. Nothing was changed`);
   } catch (error) {
     return fail(describeError(error));
   }
@@ -758,22 +871,37 @@ export async function exportSkills(ctx: ExportContext, options: ExportOptions = 
   const { skillsDir, top } = plan;
   const done: string[] = [];
   const removed: string[] = [];
-  const known = [...plan.approved.map((s) => s.name), ...plan.others.map((o) => o.name)];
-  const writeExclude = (add: readonly string[]): void => {
-    const current = lstatOrUndefined(exclude.path) === undefined ? '' : readFileSync(exclude.path, 'utf8');
-    const next = updateExcludeText(current, { add, remove: removed, known });
-    if (!next.ok) throw new Error(`the git exclude file ${exclude.path}: ${next.message}`);
-    for (const warning of next.warnings) ctx.out(`warning: ${exclude.path}: ${warning}`);
-    if (next.text === current) return;
-    if (lstatOrUndefined(dirname(exclude.path)) === undefined) fsx.mkdir(dirname(exclude.path));
-    fsx.writeAtomic(exclude.path, next.text, exclude.mode ?? 0o644);
+  const approvedNames = plan.approved.map((s) => s.name);
+  const known = [...approvedNames, ...plan.others.map((o) => o.name)];
+  let gfs: ExportFs = fsx;
+  // Adds each approved skill's line, and drops the line of each skill already removed, under the lock.
+  const writeExclude = (): void => {
+    withExcludeLock(exclude.path, gfs, () => {
+      const current = lstatOrUndefined(exclude.path) === undefined ? '' : readFileSync(exclude.path, 'utf8');
+      const next = updateExcludeText(current, { add: approvedNames, remove: removed, known });
+      if (!next.ok) throw new Error(`the git exclude file ${exclude.path}: ${next.message}`);
+      for (const warning of next.warnings) ctx.out(`warning: ${exclude.path}: ${warning}`);
+      if (next.text === current) return;
+      gfs.writeAtomic(exclude.path, next.text, exclude.mode ?? 0o644);
+    });
   };
   try {
-    for (const folder of [dirname(skillsDir), skillsDir]) {
-      if (lstatOrUndefined(folder) === undefined) fsx.mkdir(folder);
-    }
+    // Make the folders, then check and pin each one before any other write.
+    // A racer that makes `.agents` a link, or swaps either folder later, stops
+    // the export before a write can land through it.
+    const realTop = realpathSync(top);
+    const agents = dirname(skillsDir);
+    if (lstatOrUndefined(agents) === undefined) fsx.mkdir(agents);
+    const agentsPin = pinFolder(agents, join(realTop, '.agents'));
+    if (lstatOrUndefined(skillsDir) === undefined) pinnedFs(fsx, [agentsPin]).mkdir(skillsDir);
+    const skillsPin = pinFolder(skillsDir, projectSkillsDir(realTop));
+    gfs = pinnedFs(fsx, [agentsPin, skillsPin]);
+    if (lstatOrUndefined(dirname(exclude.path)) === undefined) gfs.mkdir(dirname(exclude.path));
+
+    // The exclude lines go in before the first copy, so no copy shows in git status.
+    writeExclude();
     for (const leftover of plan.leftovers.removable) {
-      fsx.remove(leftover);
+      gfs.remove(leftover);
       ctx.out(`Removed the leftover temp folder ${leftover}.`);
     }
     for (const stray of plan.leftovers.strays) {
@@ -783,15 +911,15 @@ export async function exportSkills(ctx: ExportContext, options: ExportOptions = 
       const { skill, sourceHash, path: dest } = target;
       if (kind === 'adopt') {
         if (classify(dest, skill.name, sourceHash).kind !== 'unmarked-copy') throw new Error(`${dest} changed during the export, so it was left alone`);
-        fsx.writeAtomic(join(dest, SKILL_MARKER), markerText(skill.name, sourceHash), 0o644);
+        gfs.writeAtomic(join(dest, SKILL_MARKER), markerText(skill.name, sourceHash), 0o644);
         ctx.out(`Adopted the unmarked copy of ${skill.name} at ${dest}.`);
       } else {
-        const temp = stage(skillsDir, skill, sourceHash, fsx);
+        const temp = stage(skillsDir, skill, sourceHash, gfs);
         try {
-          swapIn(temp, dest, skill.name, kind, fsx, ctx.out);
+          swapIn(temp, dest, skill.name, kind, gfs, ctx.out);
         } catch (error) {
           try {
-            fsx.remove(temp);
+            gfs.remove(temp);
           } catch (cleanup) {
             throw withCleanup(error, temp, cleanup);
           }
@@ -808,16 +936,17 @@ export async function exportSkills(ctx: ExportContext, options: ExportOptions = 
     for (const other of plan.others) {
       const again = classify(other.path, other.name, other.sourceHash).kind;
       if (again !== 'owned' && again !== 'unmarked-copy') throw new Error(`${other.path} changed during the export, so it was left alone`);
-      fsx.remove(other.path);
+      gfs.remove(other.path);
       removed.push(other.name);
       ctx.out(`Removed the stale skill ${other.name}, which this package no longer ships.`);
     }
-    writeExclude(done);
+    // A stale skill's line comes out only after its folder is gone.
+    writeExclude();
   } catch (error) {
     let note = '';
-    if (done.length > 0 || removed.length > 0) {
+    if (removed.length > 0) {
       try {
-        writeExclude(done);
+        writeExclude();
       } catch (excludeError) {
         note = ` The git exclude file was not updated (${describeError(excludeError)}).`;
       }
