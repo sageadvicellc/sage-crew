@@ -1,0 +1,11 @@
+# The owner reviews the paths that decide what the project runs, what it
+# publishes, and how it limits a supervised process. GitHub requests a
+# code-owner review on a ready pull request that touches one of them.
+# Requiring that review is a repository setting.
+/.github/ @hannasage
+/.githooks/ @hannasage
+/.sanitize-allow @hannasage
+/src/sanitize/ @hannasage
+/src/adapters/codex-supervisor.ts @hannasage
+/src/adapters/codex-args.ts @hannasage
+/src/adapters/codex-guard.ts @hannasage
