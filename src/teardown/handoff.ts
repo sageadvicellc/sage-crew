@@ -39,8 +39,8 @@ const JOB_KEYS = new Set(['schedule', 'prompt']);
 /** A commit id: 40 hex characters for SHA-1, or 64 for SHA-256, in lower case as git prints them. */
 const HEAD_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
-/** An ISO 8601 date and time with a zone: `Z` or an offset such as `+02:00`. */
-const WRITTEN_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+/** An ISO 8601 date and time with seconds and a zone: `Z` or an offset such as `+02:00`. */
+const WRITTEN_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /** One job that lives only inside a session, so the start sequence can create it again. */
 export interface TimedJob {
@@ -67,20 +67,24 @@ export type HandoffParseResult = { ok: true; handoff: Handoff } | { ok: false; e
 
 /**
  * A handoff as the loader found it. A missing file is a session that has
- * not confirmed yet. A stale file is valid but was written before this
- * teardown started, so it is from an earlier run and confirms nothing.
+ * not confirmed yet. A stale file is valid, but its `written` time or its
+ * change time on disk is before this teardown started, so it is from an
+ * earlier run and confirms nothing.
  */
 export type HandoffLoad =
   | { state: 'missing' }
   | { state: 'invalid'; errors: CrewError[] }
-  | { state: 'stale'; handoff: Handoff; notBefore: string }
+  | { state: 'stale'; handoff: Handoff; notBefore: string; changed: string }
   | { state: 'ok'; handoff: Handoff };
 
 export interface LoadHandoffOptions {
   /**
-   * The time this teardown started, in milliseconds. A handoff written
-   * before the start of that second is stale. The whole second counts,
-   * because a session often writes the time to the second only.
+   * The time this teardown started, in milliseconds. A handoff is stale
+   * when its `written` time or its change time on disk is before the start
+   * of that second. The whole second counts, because a session often writes
+   * the time to the second only. The change time is checked too, because a
+   * session writes `written` itself: a file left from an earlier run with a
+   * future `written` time still has an old change time.
    */
   notBefore?: number;
   /** The parser. Tests pass a stand-in. */
@@ -274,7 +278,8 @@ function startOfSecond(ms: number): number {
  * Reads one handoff file and checks it, with the same safety as crew.yml:
  * one open, no symbolic link followed, a regular file of at most 64 KiB.
  * A missing file, or a file in a missing folder, is `missing`. With
- * `notBefore`, a file written before the second of that time is `stale`.
+ * `notBefore`, a file whose `written` time or change time is before the
+ * second of that time is `stale`.
  * A throw from the parser makes the file `invalid`, never a crash.
  */
 export function loadHandoff(path: string, expectedSession: string, options: LoadHandoffOptions = {}): HandoffLoad {
@@ -292,8 +297,12 @@ export function loadHandoff(path: string, expectedSession: string, options: Load
   }
   if (!parsed.ok) return { state: 'invalid', errors: parsed.errors };
   const { notBefore } = options;
-  if (notBefore !== undefined && Date.parse(parsed.handoff.written) < startOfSecond(notBefore)) {
-    return { state: 'stale', handoff: parsed.handoff, notBefore: new Date(startOfSecond(notBefore)).toISOString() };
+  if (notBefore !== undefined) {
+    const floor = startOfSecond(notBefore);
+    if (Date.parse(parsed.handoff.written) < floor || read.ctimeMs < floor) {
+      const changed = new Date(read.ctimeMs).toISOString();
+      return { state: 'stale', handoff: parsed.handoff, notBefore: new Date(floor).toISOString(), changed };
+    }
   }
   return { state: 'ok', handoff: parsed.handoff };
 }

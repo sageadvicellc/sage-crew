@@ -328,7 +328,7 @@ describe('teardown: confirm and stop', () => {
     expect(t.runner.calls).toEqual([]);
     expect(readFileSync(teamJsonPath(t.env), 'utf8')).toBe(before);
     expect(t.out.text()).toMatch(
-      /worker-2: not confirmed by the timeout \(10 s\)\. Its handoff was written at 2025-12-31T12:00:00Z, before this teardown started at 2026-01-01T00:00:00\.000Z/,
+      /worker-2: not confirmed by the timeout \(10 s\)\. Its handoff says it was written at 2025-12-31T12:00:00Z, and the file last changed at .+\. One of them is before this teardown started at 2026-01-01T00:00:00\.000Z/,
     );
     expect(t.err.text()).toMatch(/Blocked by: worker-2 \(not confirmed\)/);
     expect(existsSync(join(t.handoffs, TIMED_JOBS_FILE))).toBe(false);
@@ -613,7 +613,7 @@ describe('teardown --dry-run', () => {
     confirm(t, 'worker-1');
     confirm(t, 'worker-2', { fields: { written: '2025-12-31T12:00:00Z' } });
     expect(await main(['teardown', '--dry-run'], t.deps)).toBe(EXIT_OK);
-    expect(t.out.text()).toMatch(/worker-2: not confirmed yet\. Its handoff was written at 2025-12-31T12:00:00Z/);
+    expect(t.out.text()).toMatch(/worker-2: not confirmed yet\. Its handoff says it was written at 2025-12-31T12:00:00Z/);
     expect(t.out.text()).toMatch(/would not stop the team/);
     expect(t.runner.calls).toEqual([]);
   });

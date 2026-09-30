@@ -50,7 +50,7 @@ lines that hold only `---`. A Markdown body follows.
 | `branch` | with `pushed` | The branch name, or `null`. It must not start with `-`. |
 | `head` | with `pushed` | The head commit id, as 40 or 64 lowercase hex characters, or `null`. |
 | `timed_jobs` | no | A list of at most 20 jobs. Each job is a map with `schedule` and `prompt`. |
-| `written` | yes | The time the file was written, in ISO 8601 with a zone, such as `2026-01-02T03:04:05Z`. |
+| `written` | yes | The time the file was written, in ISO 8601 with seconds and a zone, such as `2026-01-02T03:04:05Z`. Take it from `date -u`. Never guess it. |
 
 A missing `branch` or `head` is `null`. When `push` is `pushed`, both must
 be set.
@@ -89,8 +89,10 @@ or that holds them in another order, fails the file.
 - Teardown reads each folder part of the path with lstat, and then it
   opens the file with `O_NOFOLLOW`. That flag covers only the last part of
   the path. When another writer swaps a folder part for a link between the
-  lstat call and the open, the open follows that link. So keep the
-  handoff folder private to the operator.
+  lstat call and the open, the open follows that link. The same gap exists
+  on the write side, between the last lstat call on the folder and the
+  write of `timed-jobs.yml`. So keep the handoff folder private to the
+  operator.
 - The front matter is one YAML document. Each key appears once. An alias,
   a merge key, or a tag outside the YAML core schema fails the file.
 - An unknown field fails the file. It is not ignored, so a spelling mistake
@@ -139,6 +141,9 @@ teardown run first, and then ask each session for its handoff.
 - A missing file means the session has not confirmed yet.
 - A valid file with a `written` time before the teardown run started is
   from an earlier run. It confirms nothing, and teardown keeps waiting.
+- A valid file that last changed on disk before the teardown run started
+  is from an earlier run too. A later `written` time does not change that.
+  Teardown reads the change time from the same open file that it reads.
 - A valid file with a `status` other than `done` means the same.
 - A valid file with `status: done` and `writing: false` confirms the
   session.

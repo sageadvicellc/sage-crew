@@ -33,7 +33,8 @@ start the teardown run first, and send the requests second.
    > work. Commit your work, and then push your branch, or note that you
    > have nothing to push. Then write your handoff file as
    > `<handoffs>/<your session name>.md`, in the handoff format of the
-   > crew-teardown skill. Set `written` to the time now. When every other
+   > crew-teardown skill. Set `written` to the time that `date -u` prints
+   > now, in ISO 8601 with seconds. Never guess the time. When every other
    > field is true, set `status: done` last. When the file is written,
    > reply "teardown ready".
 
@@ -48,14 +49,16 @@ start the teardown run first, and send the requests second.
      whether some processes are the ones that the CLI started. Tell the
      operator which ones, and let the operator decide.
    - The output holds "No team is running.": there is nothing to stop.
-   - The output holds "Nothing was stopped": read "Blocked by". For a
-     session that is not confirmed, send the request again, and then
-     start teardown again. Or leave the session running, and tell the
-     operator which session still runs.
-   - For an invalid handoff, send the session the reason that teardown
-     printed, and ask it to fix the file.
-   - For a write in progress, wait until the session ends the write and
-     sets `writing: false`. Then start teardown again.
+   - The output holds "Nothing was stopped": read "Blocked by". To try
+     again, go back to step 2: start teardown first. Then send the request
+     to every session, not only the blocked ones. Every handoff from the
+     earlier run is now stale, so each session must write its file again
+     with a new `written` time. Or leave the team running, and tell the
+     operator which session blocked the stop.
+   - For an invalid handoff, add the reason that teardown printed to that
+     session's request. The session then fixes the file in its new write.
+   - For a write in progress, wait until the session ends the write. Then
+     try again from step 2.
    - The last line starts with "warning: the push failed for": tell the
      operator which sessions failed to push.
 
@@ -75,9 +78,11 @@ When you get a teardown request:
    loop on a fixed clock. The next start creates each one again.
 4. Write `<handoffs>/<your session name>.md` in the format below. Write
    the whole file at once.
-5. Set `status: done` last. When a write that you cannot pause is still
+5. Set `written` to the time that `date -u` prints, in ISO 8601 with
+   seconds, such as `2026-01-02T03:04:05Z`. Never guess the time.
+6. Set `status: done` last. When a write that you cannot pause is still
    running, set `writing: true`. When that write ends, set it to `false`.
-6. Reply "teardown ready" to the coordinator.
+7. Reply "teardown ready" to the coordinator.
 
 ## The handoff format
 

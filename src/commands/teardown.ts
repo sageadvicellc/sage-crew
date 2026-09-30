@@ -240,7 +240,7 @@ function reportSession(name: string, load: HandoffLoad | undefined, waited: stri
     return { lines, warnings: [], blocker: 'handoff invalid' };
   }
   if (load.state === 'stale') {
-    const line = `${name}: ${notConfirmed}. Its handoff was written at ${printable(load.handoff.written)}, before this teardown started at ${load.notBefore}, so it is from an earlier run.`;
+    const line = `${name}: ${notConfirmed}. Its handoff says it was written at ${printable(load.handoff.written)}, and the file last changed at ${load.changed}. One of them is before this teardown started at ${load.notBefore}, so it is from an earlier run.`;
     return { lines: [line], warnings: [], blocker: 'not confirmed' };
   }
   const { handoff } = load;

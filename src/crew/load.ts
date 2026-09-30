@@ -543,13 +543,14 @@ export function readCapped(fd: number, cap: number): CappedRead {
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 
 /** A file read once. A failed read keeps the system code, such as `ENOENT`, when there is one. */
-export type OnceRead = { text: string } | { reason: string; code?: string };
+export type OnceRead = { text: string; ctimeMs: number } | { reason: string; code?: string };
 
 /**
  * Opens the path once. Every check and the read use that one handle, so a
  * file swapped after the open changes nothing. No symbolic link is followed,
  * and O_NONBLOCK keeps a FIFO from hanging the open. The file must be a
- * regular file of at most `cap` bytes.
+ * regular file of at most `cap` bytes. The change time comes from the
+ * same handle, so it belongs to the file that was read.
  */
 export function readOnce(path: string, cap: number = MAX_FILE_BYTES): OnceRead {
   let fd: number | undefined;
@@ -560,7 +561,7 @@ export function readOnce(path: string, cap: number = MAX_FILE_BYTES): OnceRead {
     const tooLarge = { reason: `the file is larger than ${cap} bytes (${cap / 1024} KiB)` };
     if (info.size > cap) return tooLarge;
     const read = readCapped(fd, cap);
-    return read.tooLarge ? tooLarge : { text: read.text };
+    return read.tooLarge ? tooLarge : { text: read.text, ctimeMs: info.ctimeMs };
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
     return code === undefined ? { reason: readProblem(error) } : { reason: readProblem(error), code };

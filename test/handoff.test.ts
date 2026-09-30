@@ -88,7 +88,7 @@ describe('handoff: a valid file', () => {
     expect(result.ok && result.handoff.writing).toBe(true);
   });
 
-  it.each(['2026-01-02T03:04:05Z', '2026-01-02T03:04:05.123Z', '2026-01-02T03:04:05+02:00', '2026-01-02T03:04Z'])(
+  it.each(['2026-01-02T03:04:05Z', '2026-01-02T03:04:05.123Z', '2026-01-02T03:04:05+02:00'])(
     'accepts the written time %s',
     (written) => {
       expectValid(textOf({ fields: { written } }));
@@ -209,7 +209,7 @@ describe('handoff: the fields', () => {
     },
   );
 
-  it.each(['yesterday', '2026-01-02', '2026-13-02T03:04:05Z', '5', '"2026-01-02 03:04:05"'])('written %s fails', (written) => {
+  it.each(['yesterday', '2026-01-02', '2026-13-02T03:04:05Z', '5', '"2026-01-02 03:04:05"', '2026-01-02T03:04Z', '2026-01-02T03:04+02:00'])('written %s fails', (written) => {
     expectError(textOf({ fields: { written } }), 'written', /ISO 8601/);
   });
 });
@@ -322,6 +322,16 @@ describe('loadHandoff', () => {
     writeFileSync(file, handoffText(SESSION, { fields: { written: '2025-12-31T23:59:59Z' } }));
     const loaded = loadHandoff(file, SESSION, { notBefore: Date.parse(WRITTEN_AT) });
     expect(loaded).toMatchObject({ state: 'stale', notBefore: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('marks a file left from an earlier run as stale even when its written time is in the future', () => {
+    const file = join(tempDir(), 'worker-1.md');
+    writeFileSync(file, handoffText(SESSION, { fields: { written: '2099-01-01T00:00:00Z' } }));
+    // The run starts an hour after the file last changed on disk.
+    const notBefore = Date.now() + 60 * 60 * 1000;
+    const loaded = loadHandoff(file, SESSION, { notBefore });
+    expect(loaded.state).toBe('stale');
+    if (loaded.state === 'stale') expect(Date.parse(loaded.changed)).toBeLessThan(notBefore);
   });
 
   it('counts a handoff written in the same second as notBefore, because the time is often written to the second', () => {
