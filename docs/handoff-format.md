@@ -50,7 +50,7 @@ lines that hold only `---`. A Markdown body follows.
 | `branch` | with `pushed` | The branch name, or `null`. It must not start with `-`. |
 | `head` | with `pushed` | The head commit id, as 40 or 64 lowercase hex characters, or `null`. |
 | `timed_jobs` | no | A list of at most 20 jobs. Each job is a map with `schedule` and `prompt`. |
-| `written` | yes | The time the file was written, in ISO 8601 with seconds and a zone, such as `2026-01-02T03:04:05Z`. Take it from `date -u`. Never guess it. |
+| `written` | yes | The time the file was written, in ISO 8601 with seconds and a zone, such as `2026-01-02T03:04:05Z`. Take it from `date -u +%Y-%m-%dT%H:%M:%SZ`. Never guess it. |
 
 A missing `branch` or `head` is `null`. When `push` is `pushed`, both must
 be set.
@@ -170,7 +170,9 @@ every session is confirmed, it first writes them to
 `<handoffs>/timed-jobs.yml`, with mode 0600, and then it starts the stop.
 It writes a temporary file and renames it, so a reader never sees half a
 file. When the stop is blocked before it starts, teardown writes no timed
-jobs file. A dry run writes no file either.
+jobs file. A dry run writes no file either. A dry run also does not test
+for a stale file, because every handoff on disk is older than the real
+run.
 
 The file does not prove that the team stopped. When the stop starts but
 cannot end a process, the file stays. So a start script also reads the

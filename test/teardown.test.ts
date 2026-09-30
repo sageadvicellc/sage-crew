@@ -26,6 +26,8 @@ interface RigOptions {
   teardown?: string[] | null;
   /** No team.json at all. */
   noTeam?: boolean;
+  /** The fake clock's start, in milliseconds. Default: WRITTEN_AT. */
+  start?: number;
 }
 
 const START = Date.parse(WRITTEN_AT);
@@ -38,7 +40,7 @@ const START = Date.parse(WRITTEN_AT);
 function rig(options: RigOptions = {}): Rig {
   const sleeps: number[] = [];
   const hooks: Rig['hooks'] = {};
-  let clock = START;
+  let clock = options.start ?? START;
   const t = claudeInstalled({
     now: () => new Date(clock),
     sleep: async (ms: number) => {
@@ -608,14 +610,39 @@ describe('teardown --dry-run', () => {
     expect(t.runner.calls).toEqual([]);
   });
 
-  it('shows a leftover handoff as not confirmed', async () => {
+  it('skips the stale check, so a handoff written before the dry run still shows as confirmed', async () => {
     const t = rig();
     confirm(t, 'worker-1');
     confirm(t, 'worker-2', { fields: { written: '2025-12-31T12:00:00Z' } });
     expect(await main(['teardown', '--dry-run'], t.deps)).toBe(EXIT_OK);
-    expect(t.out.text()).toMatch(/worker-2: not confirmed yet\. Its handoff says it was written at 2025-12-31T12:00:00Z/);
-    expect(t.out.text()).toMatch(/would not stop the team/);
+    expect(t.out.text()).toMatch(/The stale check is skipped/);
+    expect(t.out.text()).toMatch(/worker-2: confirmed/);
+    expect(t.out.text()).toMatch(/a real run would stop the team/);
     expect(t.runner.calls).toEqual([]);
+  });
+
+  it('says a real run would stop the team for handoffs with real file times from before the dry run', async () => {
+    // The files get real change times now. The dry run starts an hour later, on a real clock.
+    const t = rig({ start: Date.now() + 60 * 60 * 1000 });
+    const written = new Date().toISOString();
+    confirm(t, 'worker-1', { fields: { written } });
+    confirm(t, 'worker-2', { fields: { written } });
+    expect(await main(['teardown', '--dry-run'], t.deps)).toBe(EXIT_OK);
+    expect(t.out.text()).toMatch(/worker-1: confirmed/);
+    expect(t.out.text()).toMatch(/worker-2: confirmed/);
+    expect(t.out.text()).toMatch(/a real run would stop the team/);
+    expect(t.runner.calls).toEqual([]);
+    expect(existsSync(join(t.handoffs, TIMED_JOBS_FILE))).toBe(false);
+  });
+
+  it('a real run on the same real-time files counts them as stale and stops nothing', async () => {
+    const t = rig({ start: Date.now() + 60 * 60 * 1000 });
+    const written = new Date().toISOString();
+    confirm(t, 'worker-1', { fields: { written } });
+    confirm(t, 'worker-2', { fields: { written } });
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
+    expect(t.out.text()).toMatch(/from an earlier run/);
+    expect(t.runner.calls.filter((c) => c.kind === 'kill')).toEqual([]);
   });
 
   it('prints the head in a dry run, so the operator can check it', async () => {

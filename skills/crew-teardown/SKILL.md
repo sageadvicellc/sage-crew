@@ -21,9 +21,11 @@ starts. An older file is from an earlier run, and it confirms nothing. So
 start the teardown run first, and send the requests second.
 
 1. Run `trellis-crew teardown --dry-run`. It reads each handoff once. It
-   prints each session's state, the timed jobs that a real run writes, and
-   whether a real run stops the team now. A handoff from an earlier run
-   shows as not confirmed. The dry run writes nothing and stops nothing.
+   prints each session's state and the timed jobs that a real run writes.
+   It also prints whether a real run can stop the team with the handoffs
+   that are on disk now. It does not test for a stale file, because every
+   handoff on disk is older than the real run. The dry run writes nothing
+   and stops nothing.
 2. Start `trellis-crew teardown`, so that it runs while you send the
    requests. For example, run it as a background command of your harness.
    It waits for every session to confirm, up to the timeout.
@@ -33,8 +35,8 @@ start the teardown run first, and send the requests second.
    > work. Commit your work, and then push your branch, or note that you
    > have nothing to push. Then write your handoff file as
    > `<handoffs>/<your session name>.md`, in the handoff format of the
-   > crew-teardown skill. Set `written` to the time that `date -u` prints
-   > now, in ISO 8601 with seconds. Never guess the time. When every other
+   > crew-teardown skill. Set `written` to the output of
+   > `date -u +%Y-%m-%dT%H:%M:%SZ`. Never guess the time. When every other
    > field is true, set `status: done` last. When the file is written,
    > reply "teardown ready".
 
@@ -78,8 +80,8 @@ When you get a teardown request:
    loop on a fixed clock. The next start creates each one again.
 4. Write `<handoffs>/<your session name>.md` in the format below. Write
    the whole file at once.
-5. Set `written` to the time that `date -u` prints, in ISO 8601 with
-   seconds, such as `2026-01-02T03:04:05Z`. Never guess the time.
+5. Set `written` to the output of `date -u +%Y-%m-%dT%H:%M:%SZ`, such as
+   `2026-01-02T03:04:05Z`. Never guess the time.
 6. Set `status: done` last. When a write that you cannot pause is still
    running, set `writing: true`. When that write ends, set it to `false`.
 7. Reply "teardown ready" to the coordinator.

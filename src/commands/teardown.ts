@@ -186,7 +186,7 @@ function readAll(root: string, folder: string, names: readonly string[], notBefo
  * then waits one poll interval, until every session settles or the timeout
  * passes. A session settles when its handoff is written at or after
  * `startedAt` and says `status: done` and `writing: false`. A dry run reads
- * once and never waits. The folder path is checked again before each read,
+ * once, never waits, and skips the stale check. The folder path is checked again before each read,
  * so a link put there during the wait is still refused.
  */
 async function collect(
@@ -205,7 +205,11 @@ async function collect(
     const problem = handoffFolderProblem(root, folder);
     if (problem !== undefined) return { ok: false, problem };
     for (const name of names) {
-      if (!isSettledLoad(states.get(name))) states.set(name, loadHandoff(join(folder, `${name}.md`), name, { notBefore: startedAt }));
+      if (!isSettledLoad(states.get(name))) {
+        // A dry run comes before the real run, so every handoff on disk predates it.
+        // It skips the stale check and shows each file as it is.
+        states.set(name, loadHandoff(join(folder, `${name}.md`), name, dryRun ? {} : { notBefore: startedAt }));
+      }
     }
     if (dryRun || names.every((name) => isSettledLoad(states.get(name)))) return { ok: true, states };
     const left = deadline - clock(deps);
@@ -361,7 +365,7 @@ export async function runTeardown(options: TeardownOptions, deps: CliDeps): Prom
   }
   deps.out(
     options.dryRun
-      ? `Dry run: one read of ${printable(folder)}. Nothing is written, signalled, or removed.`
+      ? `Dry run: one read of ${printable(folder)}. Nothing is written, signalled, or removed. The stale check is skipped, because every handoff on disk predates a real run. A real run counts only a handoff written after it starts.`
       : `Waiting up to ${timeout} s for ${names.length} session(s) to confirm in ${printable(folder)}.`,
   );
 

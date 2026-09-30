@@ -121,8 +121,10 @@ the coordinator session and to each session.
    `timed-jobs.yml` in the handoff folder. Then it stops the team in the
    same way as `trellis-crew stop` with no `--force-stop`.
 
-- `--dry-run` reads each handoff once and prints what a real run does now.
-  It writes nothing and stops nothing.
+- `--dry-run` reads each handoff once. It prints whether a real run can
+  stop the team with the handoffs that are on disk now. It does not test
+  for a stale file, because every handoff on disk is older than the real
+  run. It writes nothing and stops nothing.
 - `--config <file>` reads another crew file. By default, teardown reads
   `./crew.yml`.
 - `--timeout S` replaces the timeout from the file.
