@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { envFromProcess } from '../env.ts';
@@ -20,12 +20,19 @@ export const REQUIRE_VAR = 'SANITIZE_REQUIRE_DENYLIST';
 export const RANGE_VAR = 'SANITIZE_RANGE';
 /** The committed allowlist of reviewed false positives, at the repository root. */
 export const ALLOWLIST_FILE = '.sanitize-allow';
+/**
+ * Names the allowlist file to use in place of the one in the scanned
+ * repository. CI points it at the base commit's allowlist, so a branch
+ * cannot clear its own findings. A named file that does not exist counts
+ * as an empty allowlist.
+ */
+export const ALLOWLIST_VAR = 'SANITIZE_ALLOWLIST';
 
 export type UnsetPolicy = 'fail' | 'warn';
 
 /**
  * What an unset SANITIZE_DENYLIST does when SANITIZE_REQUIRE_DENYLIST is not
- * 1. A local run warns and still runs the other three checks, as the plan's
+ * 1. A local run warns and still runs the other four checks, as the plan's
  * decision 15 settled. CI and prepublishOnly set SANITIZE_REQUIRE_DENYLIST=1,
  * so there an unset deny-list fails. Changing this one value to 'fail' makes
  * every run fail.
@@ -49,7 +56,9 @@ interface Git {
 
 function makeGit(runner: Runner, cwd: string, vars: SanitizeOptions['vars']): Git {
   return async (args) => {
-    const result = await runner.run('git', ['-c', 'core.quotePath=false', ...args], { cwd, env: vars });
+    // log.mailmap=false keeps author and committer fields raw, so a
+    // branch's own .mailmap cannot rename an author before the scan.
+    const result = await runner.run('git', ['-c', 'core.quotePath=false', '-c', 'log.mailmap=false', ...args], { cwd, env: vars });
     return { ok: result.code === 0, stdout: result.stdout };
   };
 }
@@ -189,12 +198,23 @@ function validUtf16(units: Buffer): boolean {
  * Returns undefined for a binary file or a submodule folder, which hold no
  * text to scan, and CANNOT_READ when the path is missing or unreadable.
  */
-function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
+function readTracked(root: string, abs: string): string | undefined | typeof CANNOT_READ {
   try {
+    // The folder that holds the path must resolve inside the repository,
+    // so a linked folder cannot lead a read outside it. Such a path fails.
+    const dir = realpathSync(dirname(abs));
+    if (dir !== root && !dir.startsWith(root + sep)) return CANNOT_READ;
     const stat = lstatSync(abs);
+    // A link is scanned as its target text and is never followed.
     if (stat.isSymbolicLink()) return readlinkSync(abs);
     if (!stat.isFile()) return undefined;
-    return decodeText(readFileSync(abs));
+    // O_NOFOLLOW refuses a file that turned into a link after the check.
+    const fd = openSync(abs, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      return decodeText(readFileSync(fd));
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return CANNOT_READ;
   }
@@ -269,7 +289,7 @@ function loadDenyList(opts: SanitizeOptions, root: string, failures: string[]): 
     const policy = opts.vars[REQUIRE_VAR] === '1' ? 'fail' : (opts.unsetPolicy ?? UNSET_DENYLIST_POLICY);
     const message = `${DENYLIST_VAR} is unset, so the deny-list check cannot run. Point ${DENYLIST_VAR} at your deny-list file.`;
     if (policy === 'fail') failures.push(message);
-    else opts.err(`sanitize: warning: ${message} The other three checks still run.`);
+    else opts.err(`sanitize: warning: ${message} The other four checks still run.`);
     return { list: undefined, selfPath: undefined };
   }
   const path = isAbsolute(named) ? named : resolve(opts.cwd, named);
@@ -289,8 +309,10 @@ function loadDenyList(opts: SanitizeOptions, root: string, failures: string[]): 
   return { list: parsed.list, selfPath };
 }
 
-function loadAllowlist(root: string, failures: string[]): AllowEntry[] {
-  const path = join(root, ALLOWLIST_FILE);
+function loadAllowlist(opts: SanitizeOptions, root: string, failures: string[]): AllowEntry[] {
+  const named = opts.vars[ALLOWLIST_VAR];
+  const path =
+    named === undefined || named === '' ? join(root, ALLOWLIST_FILE) : isAbsolute(named) ? named : resolve(opts.cwd, named);
   if (!existsSync(path)) return [];
   const parsed = parseAllowlist(readFileSync(path, 'utf8'));
   failures.push(...parsed.errors.map((e) => `${ALLOWLIST_FILE}: ${e}`));
@@ -313,9 +335,13 @@ async function resolveRange(opts: SanitizeOptions, git: Git): Promise<string | u
   return undefined;
 }
 
-/** Escapes a line for output: every control character, and newline and tab too. */
-function oneLine(text: string): string {
-  return printable(text).replace(/\n/g, '\\n').replace(/\t/g, '\\t');
+/**
+ * Escapes a line for output: every control character, newline and tab, and
+ * every `::`. A runner reads `::` as the start of a workflow command, so a
+ * file name or range that holds it is printed as `:\x3a`.
+ */
+export function oneLine(text: string): string {
+  return printable(text).replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/::/g, ':\\x3a');
 }
 
 function print(findings: Finding[], err: (line: string) => void): void {
@@ -342,14 +368,14 @@ export async function runSanitize(options: SanitizeOptions): Promise<number> {
   const findings: Finding[] = [];
 
   const deny = loadDenyList(opts, root, failures);
-  const allow = loadAllowlist(root, failures);
+  const allow = loadAllowlist(opts, root, failures);
 
   const listed = await git(['ls-files', '-z']);
   if (!listed.ok) failures.push('cannot list tracked files');
   const tracked = listed.stdout.split('\0').filter((p) => p !== '' && p !== deny.selfPath);
   for (const path of tracked) {
     findings.push(...scanPath(path, { ...(deny.list ? { deny: deny.list } : {}), allow }));
-    const text = readTracked(join(root, path));
+    const text = readTracked(root, join(root, path));
     if (text === CANNOT_READ) {
       // A file the scan cannot read is a failure, never a silent pass.
       failures.push(`cannot read ${path}`);

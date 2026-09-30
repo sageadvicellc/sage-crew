@@ -1,6 +1,8 @@
-import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import {
   parseAllowlist,
   parseDenyList,
@@ -8,7 +10,7 @@ import {
   scanText,
   type FindingClass,
 } from '../src/sanitize/checks.ts';
-import { CANNOT_READ, decodeText, parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
+import { CANNOT_READ, decodeText, oneLine, parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
 import { createRunner, type Runner, type RunResult } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
@@ -36,6 +38,9 @@ const fake = {
   ticketApi: 'api.github.com/' + ['repos', 'other-owner', 'other-repo', 'pulls', '7'].join('/'),
   ticketShort: ['other-owner', 'other-repo'].join('/') + '#' + '12',
   tracker: 'https:' + '//example.' + 'atlassian.net/' + 'browse/KEY-1',
+  sessionUrl: 'https:' + '//claude.ai/' + ['code', 'session' + '_' + '01' + 'Fa1ke'.repeat(5)].join('/'),
+  sessionPath: 'claude.ai/' + ['code', 'session' + 's'].join('/'),
+  sessionId: 'session' + '_' + '01' + 'Fa1ke'.repeat(5),
 };
 
 const seeded: Array<[string, string, FindingClass]> = [
@@ -57,6 +62,13 @@ const seeded: Array<[string, string, FindingClass]> = [
   ['an API ticket link to another repository', fake.ticketApi, 'ticket-link'],
   ['a ticket shorthand for another repository', `fixed in ${fake.ticketShort}`, 'ticket-link'],
   ['a private tracker link', fake.tracker, 'ticket-link'],
+  ['a Claude session link', `see ${fake.sessionUrl}`, 'session-link'],
+  ['a Claude session path with no scheme', `see ${fake.sessionPath}`, 'session-link'],
+  ['a bare Claude session id', `resume ${fake.sessionId} later`, 'session-link'],
+  ['a session link in capitals', `see ${fake.sessionUrl.toUpperCase()}`, 'session-link'],
+  ['a session id with a prefix', `id cse_${fake.sessionId}`, 'session-link'],
+  ['an encoded session link', 'https%3A%2F%2F' + ['claude.ai', 'code', 'session'].join('%2F'), 'session-link'],
+  ['a session link in escaped JSON', ['claude.ai', 'code', 'session'].join('\\/'), 'session-link'],
 ];
 
 const clean = [
@@ -69,6 +81,9 @@ const clean = [
   'A placeholder credential: https://user:<token>@host.example/path',
   `A longer word that only contains the term: ${TERM}s and pre${TERM}`,
   'A funding link https://github.com/sponsors/example is not a ticket.',
+  'Names such as session_id, session_token, and session_2 are code, not session ids.',
+  'A long name such as session_initializationparameters has no digit, so it is not an id.',
+  'The page https://claude.ai/code is not a session link.',
 ];
 
 function denyList(extra = ''): ReturnType<typeof parseDenyList>['list'] {
@@ -141,6 +156,29 @@ describe('sanitize checks', () => {
     // A path allowance never clears an identity field.
     const byPath = denyList(`allow docs/a.md ${TERM}\n`);
     expect(scanText(`${TERM}@example.invalid`, { where: 'commit abc1234 author email', identity: true, deny: byPath })).toHaveLength(1);
+  });
+
+  it('a session link finding never echoes the link or the id', () => {
+    const findings = scanText(`${fake.sessionUrl}\n${fake.sessionId}\n`, { where: 'a.md', path: 'a.md' });
+    // The link on line 1 also holds an id, so line 1 has two findings.
+    expect(findings.map((f) => f.cls)).toEqual(['session-link', 'session-link', 'session-link']);
+    expect([...new Set(findings.map((f) => f.line))]).toEqual([1, 2]);
+    expect(JSON.stringify(findings)).not.toContain(fake.sessionId);
+  });
+
+  it('the committed allowlist cannot clear the session-link class', () => {
+    const { entries, errors } = parseAllowlist('fixtures/leak.md session-link\n');
+    expect(entries).toEqual([]);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('a session link in a commit message fails the run', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit(`chore: notes\n\n${fake.sessionUrl}`);
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/session-link: commit [0-9a-f]{7} message:3/);
   });
 
   it('the committed allowlist clears a reviewed file for one non-deny-list class', () => {
@@ -350,8 +388,10 @@ describe('sanitize run', () => {
     expect(result.code).toBe(1);
     expect(result.err).not.toContain('\u001b');
     expect(result.err.split('\n').filter((line) => line !== '').every((line) => line.startsWith('sanitize: '))).toBe(true);
-    expect(result.err).toContain('deny-list: z\\x1b[2K\\n::error::forged:1');
-    expect(result.err).toContain('w\\x1b[2K\\n::error::wide (staged)');
+    // `::` is escaped too, so no line can act as a workflow command.
+    expect(result.err).not.toContain('::');
+    expect(result.err).toContain('deny-list: z\\x1b[2K\\n:\\x3aerror:\\x3aforged:1');
+    expect(result.err).toContain('w\\x1b[2K\\n:\\x3aerror:\\x3awide (staged)');
   });
 
   it('a staged binary file named like a stage number is read as that path', async () => {
@@ -701,12 +741,221 @@ describe('sanitize run', () => {
     expect(g.err).toMatch(/sanitize: cannot read gone\.md/);
   });
 
+  it('the script scans the working folder it runs in, not the tree it is loaded from', () => {
+    // CI loads the sanitizer from the base commit and runs it in the
+    // branch's folder, so the branch is read only as data.
+    const repo = makeFixtureRepo();
+    repo.write('notes.md', `see ${fake.macHome}/notes\n`);
+    repo.commit('chore: start');
+    const script = join(repoRoot, 'src', 'sanitize', 'run.ts');
+    const run = spawnSync(process.execPath, [script, '--range', 'HEAD'], {
+      cwd: repo.root,
+      env: { PATH: process.env.PATH, SANITIZE_DENYLIST: denyFile() },
+      encoding: 'utf8',
+    });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/private-path: notes\.md:1/);
+  });
+
+  it('a named allowlist replaces the one in the scanned repository', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('notes.md', `see ${fake.macHome}/notes\n`);
+    repo.write('.sanitize-allow', 'notes.md private-path\n');
+    repo.commit('chore: start');
+    // The repository's own allowlist clears the finding.
+    const own = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(own.code).toBe(0);
+    // A named allowlist that lacks the entry, as the base commit's would,
+    // leaves the finding in place.
+    const base = join(repo.root, '..', `base-allow-${Date.now()}`);
+    writeFileSync(base, '# no entries\n');
+    const named = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile(), SANITIZE_ALLOWLIST: base }, 'HEAD');
+    rmSync(base);
+    expect(named.code).toBe(1);
+    expect(named.err).toMatch(/private-path: notes\.md:1/);
+    // A named allowlist that does not exist counts as empty.
+    const missing = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile(), SANITIZE_ALLOWLIST: `${base}-missing` }, 'HEAD');
+    expect(missing.code).toBe(1);
+  });
+
+  it('CI runs the base sanitizer on the branch as data, and only sanitize.yml holds the secret', () => {
+    type Workflow = {
+      on: Record<string, unknown>;
+      permissions: Record<string, string>;
+      jobs: Record<string, { permissions?: Record<string, string>; steps: Array<Record<string, unknown>> }>;
+    };
+    const read = (name: string): { text: string; parsed: Workflow } => {
+      const text = readFileSync(join(repoRoot, '.github', 'workflows', name), 'utf8');
+      return { text, parsed: parseYaml(text) as Workflow };
+    };
+    const ci = read('ci.yml');
+    expect(ci.text).not.toContain('secrets.');
+    expect(ci.text).not.toContain('sanitize/run.ts');
+
+    const { text, parsed } = read('sanitize.yml');
+    // pull_request_target always runs the base branch's copy of this file.
+    expect(Object.keys(parsed.on).sort()).toEqual(['pull_request_target', 'push']);
+    expect(parsed.on['push']).toEqual({ branches: ['main'] });
+    expect(parsed.permissions).toEqual({ contents: 'read' });
+    expect(Object.keys(parsed.jobs)).toEqual(['sanitize']);
+    const job = parsed.jobs['sanitize'];
+    expect(job?.permissions).toEqual({ contents: 'read' });
+    expect(text.match(/secrets\./g)).toHaveLength(1);
+
+    const steps = job?.steps ?? [];
+    const checkouts = steps.filter((s) => String(s['uses'] ?? '').startsWith('actions/checkout@'));
+    const opts = checkouts.map((s) => s['with'] as Record<string, unknown>);
+    expect(opts.map((o) => o['path'])).toEqual(['base', 'head']);
+    expect(String(opts[0]?.['ref'])).toContain('github.event.pull_request.base.sha');
+    expect(String(opts[1]?.['ref'])).toContain('github.event.pull_request.head.sha');
+    for (const o of opts) expect(o['persist-credentials']).toBe(false);
+    for (const s of steps) expect(String(s['run'] ?? ''), 'no npm in the sanitize job').not.toMatch(/\bnpm\b/);
+    const run = steps.find((s) => String(s['run'] ?? '').includes('sanitize/run.ts'));
+    expect(run?.['run']).toBe('node "$GITHUB_WORKSPACE/base/src/sanitize/run.ts"');
+    expect(run?.['working-directory']).toBe('head');
+    const env = run?.['env'] as Record<string, string>;
+    expect(env['SANITIZE_REQUIRE_DENYLIST']).toBe('1');
+    expect(env['SANITIZE_ALLOWLIST']).toMatch(/\/base\/\.sanitize-allow$/);
+    expect(env['SANITIZE_RANGE']).toContain("github.event_name == 'pull_request_target'");
+
+    // A pull request from a fork never receives the deny-list, so the
+    // public log cannot confirm guessed names. The write step and the full
+    // scan run only for a push or a branch in this repository.
+    const sameRepo = "github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository";
+    const write = steps.find((s) => s['name'] === 'Write the deny-list');
+    expect(write?.['if']).toBe(sameRepo);
+    expect(run?.['if']).toBe(sameRepo);
+    const fork = steps.find((s) => s['name'] === 'Sanitize a fork without the deny-list');
+    expect(fork?.['if']).toBe(
+      "github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository",
+    );
+    expect(JSON.stringify(fork)).not.toContain('secrets.');
+    expect(JSON.stringify(fork)).not.toContain('SANITIZE_DENYLIST');
+    expect(String(fork?.['run'])).toContain('the deny-list scan runs after a maintainer moves the branch into this repository');
+    expect(String(fork?.['run'])).toMatch(/exit 1\s*$/);
+    // Only the write step names the secret.
+    expect(steps.filter((s) => JSON.stringify(s).includes('secrets.'))).toEqual([write]);
+  });
+
+  it('a tracked link is scanned as its target text and never followed', async () => {
+    const repo = makeFixtureRepo();
+    // The outside file sits next to the fixture repository, and the link
+    // names it by a relative path, so the link text itself holds no leak.
+    const name = `outside-${Date.now()}.md`;
+    const outside = join(repo.root, '..', name);
+    writeFileSync(outside, `see ${fake.macHome}/notes\n`);
+    try {
+      repo.write('clean.md', 'nothing\n');
+      symlinkSync(`../${name}`, join(repo.root, 'link.md'));
+      repo.git('add', 'clean.md', 'link.md');
+      repo.commit('chore: start');
+      const followed = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      // The outside file holds a home path, but the link is not followed.
+      expect(followed.err).not.toMatch(/private-path: link\.md/);
+      expect(followed.code).toBe(0);
+
+      const named = makeFixtureRepo();
+      symlinkSync(`${fake.macHome}/notes`, join(named.root, 'home.md'));
+      named.git('add', 'home.md');
+      named.commit('chore: start');
+      // The target text itself is data, so a link that names a home path fails.
+      const target = await sanitize(named.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      expect(target.code).toBe(1);
+      expect(target.err).toMatch(/private-path: home\.md:1/);
+    } finally {
+      rmSync(outside);
+    }
+  });
+
+  it('a tracked file whose folder links outside the repository fails, and is never read', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('dir/notes.md', 'nothing\n');
+    repo.commit('chore: start');
+    // Replace the tracked folder with a link to a folder outside the
+    // repository that holds a file of the same name with a leak in it.
+    const outsideDir = join(repo.root, '..', `outside-dir-${Date.now()}`);
+    mkdirSync(outsideDir);
+    writeFileSync(join(outsideDir, 'notes.md'), `see ${fake.macHome}/notes\n`);
+    try {
+      rmSync(join(repo.root, 'dir'), { recursive: true });
+      symlinkSync(outsideDir, join(repo.root, 'dir'));
+      const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/sanitize: cannot read dir\/notes\.md/);
+      expect(result.err).not.toMatch(/private-path: dir\/notes\.md:1/);
+    } finally {
+      rmSync(outsideDir, { recursive: true });
+    }
+  });
+
+  it('a branch .mailmap cannot hide a deny-listed author', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    // The mailmap maps the deny-listed author name to a clean one.
+    repo.write('.mailmap', `Clean Name <fixture@example.invalid> ${TERM} <fixture@example.invalid>\n`);
+    repo.git('add', '-A');
+    repo.git('-c', `user.name=${TERM}`, 'commit', '-q', '-m', 'chore: start');
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/deny-list: commit [0-9a-f]{7} author name:/);
+  });
+
+  it('every git call the sanitizer makes turns the mailmap off', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    const real = createRunner();
+    const gitCalls: string[][] = [];
+    const runner: Runner = {
+      ...real,
+      run: (command, args, options) => {
+        if (command === 'git' && !args.includes('cat-file') && args[0] !== 'rev-parse') gitCalls.push([...args]);
+        return real.run(command, args, options);
+      },
+    };
+    await runSanitize({
+      cwd: repo.root,
+      runner,
+      vars: { PATH: process.env.PATH, SANITIZE_DENYLIST: denyFile() },
+      range: 'HEAD',
+      out: () => {},
+      err: () => {},
+    });
+    expect(gitCalls.length).toBeGreaterThan(0);
+    for (const args of gitCalls) expect(args.slice(0, 4), args.join(' ')).toEqual(['-c', 'core.quotePath=false', '-c', 'log.mailmap=false']);
+  });
+
+  it('a printed line never holds a workflow command marker', () => {
+    expect(oneLine('::error::name.md')).not.toContain('::');
+    expect(oneLine('a::b')).toBe('a:\\x3ab');
+    expect(oneLine('sanitize: clean.')).toBe('sanitize: clean.');
+  });
+
+  it('the sanitizer imports only node built-ins and its own files, so CI installs nothing to run it', () => {
+    const seen = new Set<string>();
+    const queue = [join(repoRoot, 'src', 'sanitize', 'run.ts')];
+    while (queue.length > 0) {
+      const file = queue.pop() as string;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const text = readFileSync(file, 'utf8');
+      // A dynamic import or a require could load a package too.
+      expect(text, `${file} loads a module at run time`).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
+      for (const [, spec] of text.matchAll(/^\s*(?:import|export)\b[^'"]*?from\s+['"]([^'"]+)['"]/gm)) {
+        if ((spec as string).startsWith('node:')) continue;
+        expect(spec, `${file} imports ${spec}`).toMatch(/^\.\.?\//);
+        queue.push(join(file, '..', spec as string));
+      }
+    }
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
   it('60: the repository passes with the fixture deny-list', async () => {
     const result = await sanitize(repoRoot, {
       SANITIZE_DENYLIST: join(repoRoot, 'test', 'fixtures', 'sanitize', 'denylist.txt'),
       SANITIZE_REQUIRE_DENYLIST: '1',
     });
-    expect(result.err).not.toMatch(/: (secret|deny-list|private-path|ticket-link): /);
+    expect(result.err).not.toMatch(/: (secret|deny-list|private-path|ticket-link|session-link): /);
     expect(result.code).toBe(0);
   });
 });

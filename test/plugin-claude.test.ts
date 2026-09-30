@@ -3,7 +3,9 @@ import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_MARKETPLACE_NAME,
+  CLAUDE_MARKETPLACE_REF,
   CLAUDE_MARKETPLACE_REPO,
+  CLAUDE_MARKETPLACE_SOURCE,
   CLAUDE_PLUGIN_ID,
 } from '../src/adapters/claude-code.ts';
 import { main, type CliDeps } from '../src/cli.ts';
@@ -45,6 +47,11 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe('Claude Code plugin install and update', () => {
+  it('pins the marketplace to one exact release tag', () => {
+    expect(CLAUDE_MARKETPLACE_REF).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(CLAUDE_MARKETPLACE_SOURCE).toBe(`${CLAUDE_MARKETPLACE_REPO}#${CLAUDE_MARKETPLACE_REF}`);
+  });
+
   it('derives the marketplace name from the repository constant', () => {
     expect(CLAUDE_MARKETPLACE_NAME).toBe(CLAUDE_MARKETPLACE_REPO.split('/')[1]);
     expect(CLAUDE_PLUGIN_ID).toBe(`trellis-crew@${CLAUDE_MARKETPLACE_NAME}`);
@@ -54,7 +61,8 @@ describe('Claude Code plugin install and update', () => {
     const t = rig();
     expect(await main(['install', '--non-interactive', '--yes'], t.deps)).toBe(0);
     expect(pluginCalls(t.runner)).toEqual([
-      [claude, 'plugin', 'marketplace', 'add', CLAUDE_MARKETPLACE_REPO],
+      // The marketplace is pinned to a reviewed tag, never a moving branch.
+      [claude, 'plugin', 'marketplace', 'add', 'sageadvicellc/sage-freebies#v0.1.0'],
       [claude, 'plugin', 'install', CLAUDE_PLUGIN_ID],
     ]);
     expect(readInstallRecord(t.env)).toMatchObject({

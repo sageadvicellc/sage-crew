@@ -188,7 +188,7 @@ This repository is public. The sanitizer keeps private text out of it.
 Run it with `npm run sanitize`. It scans every tracked file and the
 staged diff. For each commit in a range, it scans the message, the added
 lines, and the author and committer names and emails. So a leak that one
-commit adds and a later commit removes still fails. It fails on four
+commit adds and a later commit removes still fails. It fails on five
 classes of text.
 
 1. Secrets: an API key or token prefix followed by a full key, a
@@ -199,6 +199,8 @@ classes of text.
    `/home/<name>/`, and socket paths.
 4. Ticket links to any GitHub repository other than
    sageadvicellc/trellis-crew, and links to a private tracker.
+5. Session links: a link to a Claude Code session, and a bare session id.
+   The committed allowlist cannot clear this class.
 
 A finding names the class, the file, and the line. It never prints the
 text it found.
@@ -230,7 +232,7 @@ allow @author project-codename
 ```
 
 When `SANITIZE_DENYLIST` is unset, a local run prints a warning and still
-runs the other three checks. With `SANITIZE_REQUIRE_DENYLIST=1`, an unset
+runs the other four checks. With `SANITIZE_REQUIRE_DENYLIST=1`, an unset
 deny-list fails the run. CI and `prepublishOnly` set that variable, so CI
 stays red until the maintainer adds the secret.
 
@@ -239,6 +241,10 @@ stays red until the maintainer adds the secret.
 `.sanitize-allow` holds reviewed false positives for the secret,
 private-path, and ticket-link classes. Each line is `<path> <class>`. It
 never holds a deny-list allowance.
+
+The `SANITIZE_ALLOWLIST` variable names another allowlist file to use in
+its place. CI points it at the base commit's allowlist, so a pull request
+cannot clear its own findings. A new entry takes effect after it merges.
 
 ### The commit range
 
@@ -250,4 +256,9 @@ range is `origin/main..HEAD` when `origin/main` exists.
 
 `.githooks/pre-push` runs the sanitizer on the commits you push. Turn it
 on once per clone with `git config core.hooksPath .githooks`. CI runs the
-same checks on every pull request and push.
+same checks on every pull request and every push to main, in
+`.github/workflows/sanitize.yml`. That workflow runs the base branch's
+sanitizer and reads the branch only as data. A pull request from a fork
+never receives the deny-list. It runs the other four checks and then
+fails, because the deny-list scan runs only after a maintainer moves the
+branch into this repository.

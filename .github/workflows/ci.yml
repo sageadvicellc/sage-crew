@@ -38,21 +38,5 @@ jobs:
       - run: npm test
       - run: npm run build
 
-      # The deny-list is never committed. It lives in a repository secret.
-      # The secret reaches this step as an environment variable and goes
-      # straight to a file, so it never appears in the log. When the secret
-      # is missing, no file is written and the sanitize step fails closed.
-      - name: Write the deny-list
-        env:
-          SANITIZE_DENYLIST_CONTENT: ${{ secrets.SANITIZE_DENYLIST_CONTENT }}
-        run: |
-          if [ -n "$SANITIZE_DENYLIST_CONTENT" ]; then
-            printf '%s\n' "$SANITIZE_DENYLIST_CONTENT" > "$RUNNER_TEMP/denylist.txt"
-          fi
-
-      - name: Sanitize
-        env:
-          SANITIZE_REQUIRE_DENYLIST: "1"
-          SANITIZE_DENYLIST: ${{ runner.temp }}/denylist.txt
-          SANITIZE_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
-        run: npm run sanitize
+      # The sanitizer is not here. It runs in sanitize.yml, the only
+      # workflow that holds the deny-list secret.

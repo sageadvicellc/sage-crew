@@ -1,9 +1,9 @@
 /**
- * The sanitizer's four check classes. Every pattern here is written so that
+ * The sanitizer's five check classes. Every pattern here is written so that
  * this file's own text does not match it.
  */
 
-export type FindingClass = 'secret' | 'deny-list' | 'private-path' | 'ticket-link';
+export type FindingClass = 'secret' | 'deny-list' | 'private-path' | 'ticket-link' | 'session-link';
 
 export interface Finding {
   cls: FindingClass;
@@ -126,6 +126,24 @@ const PATTERNS: readonly Pattern[] = [
     cls: 'ticket-link',
     detail: 'link to a private tracker',
     regex: /\b[\w-]+\.atlassian\.net\/(?:browse|jira)\/|\blinear\.app\/[\w-]+\/issue\//g,
+  },
+  // A Claude Code session link or id points at a private conversation.
+  {
+    cls: 'session-link',
+    detail: 'Claude session link',
+    // The parts may be joined by `/`, by `%2F` in an encoded URL, or by
+    // `\/` in escaped JSON. No word boundary leads it, because an encoded
+    // URL puts `%2F` right before the host.
+    regex: /claude\.ai(?:\/|%2f|\\\/)code(?:\/|%2f|\\\/)session/gi,
+  },
+  {
+    cls: 'session-link',
+    detail: 'Claude session id',
+    // The id is `session_` and 24 or more letters and digits, with at least
+    // one digit, so code names such as a `session_id` field or a long word
+    // do not match. A letter or digit may not touch either end, but an
+    // underscore before it may, as in a prefixed id.
+    regex: /(?<![0-9A-Za-z])session_(?=[A-Za-z]*[0-9])[0-9A-Za-z]{24,}(?![0-9A-Za-z])/gi,
   },
 ];
 
