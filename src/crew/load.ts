@@ -1,4 +1,5 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import {
   isAlias,
   isCollection,
@@ -14,6 +15,7 @@ import {
   type Pair,
   type YAMLMap,
 } from 'yaml';
+import { hasParentPart } from '../mailbox/folder.ts';
 import { hasControlCharacter, printable } from '../printable.ts';
 import {
   BUILT_HARNESSES,
@@ -23,13 +25,17 @@ import {
   CREW_SCHEMA_VERSION,
   DEFAULT_LANES,
   DEFAULT_PERMISSION_MODE,
+  DEFAULT_TEARDOWN_TIMEOUT,
   isAcceptedGitUrl,
+  isTeardownTimeout,
   LANES_MAX,
   LANES_MIN,
   MAX_FILE_BYTES,
   pathSafeNameProblem,
   PERMISSION_MODES,
   REFUSED_PERMISSION_MODE,
+  TEARDOWN_TIMEOUT_MAX,
+  TEARDOWN_TIMEOUT_MIN,
   type BuiltHarness,
   type BuiltinRole,
   type CrewConfig,
@@ -37,22 +43,30 @@ import {
   type CrewParseResult,
   type CrewRole,
   type CrewSource,
+  type CrewTeardown,
   type PermissionMode,
 } from './schema.ts';
 
-const TOP_KEYS = new Set(['version', 'harness', 'crew', 'require', 'front', 'roles']);
+const TOP_KEYS = new Set(['version', 'harness', 'crew', 'require', 'front', 'roles', 'teardown']);
 const CREW_KEYS = new Set(['path', 'git', 'ref']);
 const ROLE_KEYS = new Set(['role', 'builtin', 'kickoff', 'name', 'model', 'permission_mode', 'restricted', 'lanes']);
+const TEARDOWN_KEYS = new Set(['handoffs', 'timeout']);
 
-/** Collects errors for one file, with the line of the node each one points at. */
-class Checker {
+/**
+ * Collects errors for one file, with the line of the node each one points
+ * at. `lineOffset` is the count of file lines before the parsed text, as
+ * for front matter that starts after a `---` line.
+ */
+export class Checker {
   readonly errors: CrewError[] = [];
   readonly file: string;
   private readonly counter: LineCounter;
+  private readonly lineOffset: number;
 
-  constructor(file: string, counter: LineCounter) {
+  constructor(file: string, counter: LineCounter, lineOffset = 0) {
     this.file = file;
     this.counter = counter;
+    this.lineOffset = lineOffset;
   }
 
   /** The 1-based line a node starts on. A pair points at its key. Unknown position: line 1. */
@@ -64,7 +78,7 @@ class Checker {
 
   /** The line of a character offset. Unknown offset: line 1. */
   lineAt(offset: number | undefined): number {
-    return offset === undefined ? 1 : this.counter.linePos(offset).line;
+    return (offset === undefined ? 1 : this.counter.linePos(offset).line) + this.lineOffset;
   }
 
   fail(node: unknown, field: string, reason: string): void {
@@ -72,25 +86,25 @@ class Checker {
   }
 }
 
-function pairOf(map: YAMLMap, key: string): Pair | undefined {
+export function pairOf(map: YAMLMap, key: string): Pair | undefined {
   return map.items.find((pair) => isScalar(pair.key) && pair.key.value === key);
 }
 
 /** The node a value sits on, so an error points at the value and not the key. */
-function valueNode(pair: Pair): unknown {
+export function valueNode(pair: Pair): unknown {
   return isScalar(pair.value) || isMap(pair.value) || isSeq(pair.value) ? pair.value : pair;
 }
 
-function scalarOf(pair: Pair): unknown {
+export function scalarOf(pair: Pair): unknown {
   return isScalar(pair.value) ? pair.value.value : undefined;
 }
 
 /** A value as it is echoed in a reason, with control characters escaped. */
-function shown(value: unknown): string {
+export function shown(value: unknown): string {
   return JSON.stringify(printable(typeof value === 'string' ? value : String(value)));
 }
 
-function checkUnknownKeys(c: Checker, map: YAMLMap, allowed: Set<string>, prefix: string): void {
+export function checkUnknownKeys(c: Checker, map: YAMLMap, allowed: Set<string>, prefix: string): void {
   for (const pair of map.items) {
     const key = isScalar(pair.key) ? String(pair.key.value) : undefined;
     if (key !== undefined && allowed.has(key)) continue;
@@ -101,13 +115,13 @@ function checkUnknownKeys(c: Checker, map: YAMLMap, allowed: Set<string>, prefix
 }
 
 /** The pair for a required key. A missing one is reported on the line of its parent map. */
-function requiredPair(c: Checker, map: YAMLMap, key: string, field: string): Pair | undefined {
+export function requiredPair(c: Checker, map: YAMLMap, key: string, field: string): Pair | undefined {
   const pair = pairOf(map, key);
   if (!pair) c.fail(map, field, `${key} is required`);
   return pair;
 }
 
-interface TextOptions {
+export interface TextOptions {
   /** Allow a newline and a tab, as a prompt does. Other control characters still fail. */
   multiline?: boolean;
   /** Refuse a leading `-`, which a command could read as an option. */
@@ -115,12 +129,12 @@ interface TextOptions {
 }
 
 /** A non-empty string value, or undefined after reporting why the value is not one. */
-function nonEmptyText(c: Checker, pair: Pair, field: string, key: string, options: TextOptions = {}): string | undefined {
+export function nonEmptyText(c: Checker, pair: Pair, field: string, key: string, options: TextOptions = {}): string | undefined {
   return checkedText(c, valueNode(pair), scalarOf(pair), field, key, options);
 }
 
 /** The same check for a value that is not on a pair, such as a list item. `node` is where an error points. */
-function checkedText(c: Checker, node: unknown, value: unknown, field: string, key: string, options: TextOptions = {}): string | undefined {
+export function checkedText(c: Checker, node: unknown, value: unknown, field: string, key: string, options: TextOptions = {}): string | undefined {
   if (typeof value !== 'string' || value.trim() === '') {
     c.fail(node, field, `${key} must be a non-empty text value`);
     return undefined;
@@ -363,13 +377,54 @@ function checkFront(c: Checker, root: YAMLMap, drafts: RoleDraft[] | undefined):
   return front;
 }
 
+/** A handoff folder path: relative, with no `..` part and no leading `-`. */
+function checkHandoffs(c: Checker, map: YAMLMap): string | undefined {
+  const pair = requiredPair(c, map, 'handoffs', 'teardown.handoffs');
+  if (!pair) return undefined;
+  const handoffs = nonEmptyText(c, pair, 'teardown.handoffs', 'handoffs', { noLeadingHyphen: true });
+  if (handoffs === undefined) return undefined;
+  if (isAbsolute(handoffs)) {
+    c.fail(valueNode(pair), 'teardown.handoffs', 'handoffs must be a relative path, read from the folder that holds crew.yml');
+    return undefined;
+  }
+  if (hasParentPart(handoffs)) {
+    c.fail(valueNode(pair), 'teardown.handoffs', 'handoffs must not hold a .. part');
+    return undefined;
+  }
+  return handoffs;
+}
+
+function checkTeardownTimeout(c: Checker, map: YAMLMap): number | undefined {
+  const pair = pairOf(map, 'timeout');
+  if (!pair) return DEFAULT_TEARDOWN_TIMEOUT;
+  const value = scalarOf(pair);
+  if (isTeardownTimeout(value)) return value;
+  c.fail(valueNode(pair), 'teardown.timeout', `timeout must be a whole number of seconds from ${TEARDOWN_TIMEOUT_MIN} to ${TEARDOWN_TIMEOUT_MAX}`);
+  return undefined;
+}
+
+/** The optional `teardown` block. Undefined when it is absent or fails a check. */
+function checkTeardown(c: Checker, root: YAMLMap): CrewTeardown | undefined {
+  const pair = pairOf(root, 'teardown');
+  if (!pair) return undefined;
+  const map = pair.value;
+  if (!isMap(map)) {
+    c.fail(valueNode(pair), 'teardown', 'teardown must be a map with handoffs and an optional timeout');
+    return undefined;
+  }
+  checkUnknownKeys(c, map, TEARDOWN_KEYS, 'teardown.');
+  const handoffs = checkHandoffs(c, map);
+  const timeout = checkTeardownTimeout(c, map);
+  return handoffs === undefined || timeout === undefined ? undefined : { handoffs, timeout };
+}
+
 interface YamlProblem {
   message: string;
   code: string;
   pos: [number, number];
 }
 
-function yamlProblems(c: Checker, problems: readonly YamlProblem[]): void {
+export function yamlProblems(c: Checker, problems: readonly YamlProblem[]): void {
   for (const problem of problems) {
     const reason =
       problem.code === 'MULTIPLE_DOCS'
@@ -380,7 +435,7 @@ function yamlProblems(c: Checker, problems: readonly YamlProblem[]): void {
 }
 
 /** Fails an alias and any explicit tag outside the YAML core schema. An anchor alone is harmless. */
-function checkTagsAndAliases(c: Checker, doc: Document): void {
+export function checkTagsAndAliases(c: Checker, doc: Document): void {
   visit(doc, (_key, node) => {
     if (isAlias(node)) {
       c.fail(node, '(file)', `an alias (*${node.source}) is not allowed; write the value out`);
@@ -426,6 +481,7 @@ export function parseCrewYml(text: string, file: string): CrewParseResult {
   const require = checkRequire(c, root);
   const drafts = checkRoles(c, root);
   const front = checkFront(c, root, drafts);
+  const teardown = checkTeardown(c, root);
 
   const roles = drafts?.map((draft) => draft.role);
   if (c.errors.length > 0 || !harness || !crew || front === undefined || !roles || roles.some((role) => !role)) {
@@ -439,11 +495,12 @@ export function parseCrewYml(text: string, file: string): CrewParseResult {
     front,
     roles: roles.filter((role): role is CrewRole => role !== undefined),
   };
+  if (teardown !== undefined) config.teardown = teardown;
   return { ok: true, config };
 }
 
 /** A human reason for a failed read or stat, with the system code kept in brackets. */
-function readProblem(error: unknown): string {
+export function readProblem(error: unknown): string {
   const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
   switch (code) {
     case 'ENOENT':
@@ -485,23 +542,28 @@ export function readCapped(fd: number, cap: number): CappedRead {
 
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 
+/** A file read once. A failed read keeps the system code, such as `ENOENT`, when there is one. */
+export type OnceRead = { text: string } | { reason: string; code?: string };
+
 /**
  * Opens the path once. Every check and the read use that one handle, so a
  * file swapped after the open changes nothing. No symbolic link is followed,
- * and O_NONBLOCK keeps a FIFO from hanging the open.
+ * and O_NONBLOCK keeps a FIFO from hanging the open. The file must be a
+ * regular file of at most `cap` bytes.
  */
-function readOnce(path: string): { text: string } | { reason: string } {
+export function readOnce(path: string, cap: number = MAX_FILE_BYTES): OnceRead {
   let fd: number | undefined;
   try {
     fd = openSync(path, OPEN_FLAGS);
     const info = fstatSync(fd);
     if (!info.isFile()) return { reason: 'the path is not a regular file' };
-    const tooLarge = { reason: `the file is larger than ${MAX_FILE_BYTES} bytes (${MAX_FILE_BYTES / 1024} KiB)` };
-    if (info.size > MAX_FILE_BYTES) return tooLarge;
-    const read = readCapped(fd, MAX_FILE_BYTES);
+    const tooLarge = { reason: `the file is larger than ${cap} bytes (${cap / 1024} KiB)` };
+    if (info.size > cap) return tooLarge;
+    const read = readCapped(fd, cap);
     return read.tooLarge ? tooLarge : { text: read.text };
   } catch (error) {
-    return { reason: readProblem(error) };
+    const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
+    return code === undefined ? { reason: readProblem(error) } : { reason: readProblem(error), code };
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -514,4 +576,9 @@ function readOnce(path: string): { text: string } | { reason: string } {
 export function loadCrewYml(path: string): CrewParseResult {
   const read = readOnce(path);
   return 'text' in read ? parseCrewYml(read.text, path) : fileError(path, read.reason);
+}
+
+/** One error as a printed line: file, line, field, and reason, with control characters escaped. */
+export function formatCrewError(error: CrewError): string {
+  return printable(`${error.file}:${error.line}: ${error.field}: ${error.reason}`);
 }

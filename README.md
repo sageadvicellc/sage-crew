@@ -100,6 +100,36 @@ To check for a newer CLI and update the plugin, run
 `trellis-crew update`. Add `--check` to change nothing. The CLI prints
 your harness's own update command, and it never runs that command.
 
+### Tear down your team
+
+Before a restart, run a teardown. It stops the team only after every
+session hands off its work. The `crew-teardown` skill gives the steps to
+the coordinator session and to each session.
+
+1. Add a `teardown` block to `crew.yml`. Set `handoffs` to the folder for
+   handoff files, relative to the folder that holds `crew.yml`. Set
+   `timeout` to the longest wait in seconds, from 10 to 3600. The default
+   is 300.
+2. The coordinator asks each session to commit and push its branch, and to
+   write its handoff file. `docs/handoff-format.md` gives the format.
+3. Run `trellis-crew teardown`. It waits for every session to confirm, up
+   to the timeout. It lists the timed jobs that live only inside a
+   session, and it writes them to `timed-jobs.yml` in the handoff folder.
+   Then it stops the team in the same way as `trellis-crew stop` with no
+   `--force-stop`.
+
+- `--dry-run` reads each handoff once and prints what a real run does. It
+  writes nothing and stops nothing.
+- `--config <file>` reads another crew file. By default, teardown reads
+  `./crew.yml`.
+- `--timeout S` replaces the timeout from the file.
+
+Teardown stops nothing in three cases: a session does not confirm, a
+handoff is invalid, or a session still has a write in progress. In each
+case, teardown keeps the team record, names each session that blocked the
+stop, and exits 1. It has no force flag. Ask the session again, or leave
+it running.
+
 ### What each harness does
 
 The launch fields `autocompact`, `model`, and `effort` are checked on
@@ -172,6 +202,7 @@ licence.
 | `department-researcher` | The researcher, who answers one question at a time from cited sources |
 | `department-handoff-contract` | The hand-off block that a lead sends with each task |
 | `department-audit-log` | The log line that the auditor writes for each check |
+| `crew-teardown` | The teardown steps: each session hands off, and then the CLI stops the team |
 
 ## Build your own config
 

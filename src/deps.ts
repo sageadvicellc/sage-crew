@@ -26,6 +26,8 @@ export interface CliDeps {
   ask?: (question: string) => Promise<string>;
   /** The clock. */
   now?: () => Date;
+  /** Waits this many milliseconds. Tests pass a stand-in that moves a fake clock. */
+  sleep?: (ms: number) => Promise<void>;
   /** Reads the latest published version. Tests always pass a stand-in. */
   fetchLatest?: FetchLatest;
 }

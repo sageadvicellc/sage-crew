@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { isTeardownTimeout, TEARDOWN_TIMEOUT_MAX, TEARDOWN_TIMEOUT_MIN } from './crew/schema.ts';
 import type { Transport } from './roles/schema.ts';
 
 export type TransportFlag = Transport;
@@ -21,6 +22,7 @@ export type Command =
   | { name: 'start'; workers?: number; roles?: string; yes: boolean }
   | { name: 'status' }
   | { name: 'stop'; forceStop: boolean }
+  | { name: 'teardown'; config?: string; timeout?: number; dryRun: boolean }
   | { name: 'respawn'; session: string; model?: string; effort?: string; autocompact?: string; yes?: boolean; forceStop?: boolean };
 
 export type ParseResult = { ok: true; command: Command } | { ok: false; message: string };
@@ -31,6 +33,7 @@ export const USAGE = `Usage:
   trellis-crew start [--workers N] [--roles sagespec.yml] [--yes]
   trellis-crew status
   trellis-crew stop [--force-stop]
+  trellis-crew teardown [--config crew.yml] [--timeout S] [--dry-run]
   trellis-crew respawn <name> [--model M] [--effort E] [--autocompact N] [--yes] [--force-stop]
   trellis-crew --roles sagespec.yml    (shorthand for start with a roles file)`;
 
@@ -151,6 +154,31 @@ function parseStop(args: string[]): ParseResult {
   return { ok: true, command: { name: 'stop', forceStop: values['force-stop'] === true } };
 }
 
+function parseTimeout(raw: string | undefined): number | undefined | Error {
+  if (raw === undefined) return undefined;
+  const value = /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (isTeardownTimeout(value)) return value;
+  return new Error(`--timeout takes a whole number of seconds from ${TEARDOWN_TIMEOUT_MIN} to ${TEARDOWN_TIMEOUT_MAX}, not "${raw}"`);
+}
+
+function parseTeardown(args: string[]): ParseResult {
+  const { values } = parse(
+    args,
+    {
+      config: { type: 'string' },
+      timeout: { type: 'string' },
+      'dry-run': { type: 'boolean', default: false },
+    },
+    false,
+  );
+  const timeout = parseTimeout(typeof values.timeout === 'string' ? values.timeout : undefined);
+  if (timeout instanceof Error) return { ok: false, message: timeout.message };
+  const command: Extract<Command, { name: 'teardown' }> = { name: 'teardown', dryRun: values['dry-run'] === true };
+  if (typeof values.config === 'string') command.config = values.config;
+  if (timeout !== undefined) command.timeout = timeout;
+  return { ok: true, command };
+}
+
 /** Parses the command line. A usage error returns a message and never throws. */
 export function parseCommand(argv: readonly string[]): ParseResult {
   const [first, ...rest] = argv;
@@ -175,6 +203,8 @@ export function parseCommand(argv: readonly string[]): ParseResult {
         return parseStop(rest);
       case 'respawn':
         return parseRespawn(rest);
+      case 'teardown':
+        return parseTeardown(rest);
       default:
         return { ok: false, message: `unknown command "${first}"` };
     }
