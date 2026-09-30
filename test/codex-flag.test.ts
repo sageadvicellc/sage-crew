@@ -1,7 +1,11 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { codexAdapter } from '../src/adapters/codex.ts';
+import type { Adapter } from '../src/adapters/types.ts';
 import { main, type CliDeps } from '../src/cli.ts';
+import type { HarnessId } from '../src/roles/schema.ts';
+import { SMALL_TEAM } from './helpers/roles.ts';
 import { CODEX_EXPERIMENTAL_MESSAGE, codexExperimentalProblem } from '../src/experimental.ts';
 import { installYmlPath, readInstallRecord } from '../src/store/install-yml.ts';
 import { readTeam, teamJsonPath, writeTeam } from '../src/store/team-json.ts';
@@ -99,6 +103,8 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
     expect(await main(['install', '--harness', 'codex', '--non-interactive'], off.deps)).toBe(2);
     expect(off.err.text()).toContain(MESSAGE);
     expect(off.runner.calls).toEqual([]);
+    // Nothing about Codex is printed before the refusal, not even "Using Codex CLI".
+    expect(off.out.text()).toBe('');
     expect(readFileSync(installYmlPath(off.env), 'utf8')).toBe(before);
     expect(existsSync(join(off.env.home, '.agents'))).toBe(false);
 
@@ -114,6 +120,7 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
     expect(await main(['install'], off.deps)).toBe(2);
     expect(off.err.text()).toContain(MESSAGE);
     expect(off.runner.calls).toEqual([]);
+    expect(off.out.text()).toBe('');
     expect(readFileSync(installYmlPath(off.env), 'utf8')).toBe(before);
 
     const on = withFlag(installedOn('codex', 'file-mailbox'), ON);
@@ -135,7 +142,33 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
     expect(err.text()).toContain(MESSAGE);
     expect(existsSync(installYmlPath(off))).toBe(false);
     expect(existsSync(join(off.home, '.agents'))).toBe(false);
-    expect(runner.calls.filter((c) => c.args[0] === 'plugin' || c.args[0] === 'skills')).toEqual([]);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it('install that detects Claude Code and Codex, flag off: codex --version never runs, and Claude Code probes as before', async () => {
+    const pathDir = join(makeFixtureHome(), 'both');
+    mkdirSync(pathDir);
+    copyFileSync(join(fixtureBin, 'codex'), join(pathDir, 'codex'));
+    copyFileSync(join(fixtureBin, 'claude'), join(pathDir, 'claude'));
+    const run = async (flag: string | undefined) => {
+      const env = makeTestEnv({ path: pathDir });
+      mkdirSync(join(env.home, '.claude'));
+      const runner = recordingRunner();
+      const out = capture();
+      const err = capture();
+      const vars: Record<string, string | undefined> = { HOME: env.home, PATH: pathDir };
+      if (flag !== undefined) vars[VARIABLE] = flag;
+      await main(['install', '--non-interactive', '--skip-inbound'], { env: { ...env, vars }, runner, out: out.write, err: err.write });
+      return { runner, out };
+    };
+    const off = await run(OFF);
+    expect(off.runner.calls.some((c) => basename(c.command) === 'codex')).toBe(false);
+    expect(off.runner.calls.some((c) => basename(c.command) === 'claude' && c.args[0] === '--version')).toBe(true);
+    expect(off.out.text()).not.toContain('Codex');
+
+    const on = await run(ON);
+    expect(on.runner.calls.some((c) => basename(c.command) === 'codex' && c.args[0] === '--version')).toBe(true);
+    expect(on.out.text()).toContain('Found Codex CLI');
   });
 
   it('start when install.yml records codex', async () => {
@@ -143,6 +176,16 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
     expect(await main(['start'], off.deps)).toBe(2);
     expect(off.err.text()).toContain(MESSAGE);
     expectNothingHappened(off);
+
+    // A roles file in this folder would be listed and confirmed. With the flag off, nothing is shown or asked.
+    const prompted = withFlag(installedOn('codex', 'file-mailbox', { ask: async () => 'y' }), OFF);
+    const ask = vi.fn(async () => 'y');
+    const deps: CliDeps = { ...prompted.deps, ask, env: { ...prompted.env, stdinIsTTY: true } };
+    writeFileSync(join(prompted.env.cwd, 'sagespec.yml'), SMALL_TEAM);
+    expect(await main(['start'], deps)).toBe(2);
+    expect(ask).not.toHaveBeenCalled();
+    expect(prompted.out.text()).toBe('');
+    expect(prompted.err.text()).toBe(MESSAGE);
 
     const on = withFlag(installedOn('codex', 'file-mailbox'), ON);
     expect(await main(['start'], on.deps)).toBe(0);
@@ -159,6 +202,7 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
     expect(off.err.text()).toContain(MESSAGE);
     expect(off.err.text()).not.toContain('cannot stop');
     expect(off.runner.calls).toEqual([]);
+    expect(off.out.text()).toBe('');
     expect(readTeam(off.env)).toMatchObject({ ok: true, record: { sessions: [{ name: 'main', pid: null }] } });
 
     // With the flag on, respawn goes past the gate to its own next check, which is unchanged.
@@ -170,11 +214,14 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
   });
 
   it('update when install.yml records codex', async () => {
-    const fetchLatest = async () => ({ status: 'not-published' as const });
+    const fetchLatest = vi.fn(async () => ({ status: 'not-published' as const }));
     const off = withFlag(installedOn('codex', 'file-mailbox', { fetchLatest }), OFF);
     const before = readFileSync(installYmlPath(off.env), 'utf8');
     expect(await main(['update'], off.deps)).toBe(2);
     expect(off.err.text()).toContain(MESSAGE);
+    // No network call, and no version line, before the refusal.
+    expect(fetchLatest).not.toHaveBeenCalled();
+    expect(off.out.text()).toBe('');
     expect(off.runner.calls).toEqual([]);
     expect(readFileSync(installYmlPath(off.env), 'utf8')).toBe(before);
 
@@ -191,6 +238,39 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
     await main(['stop'], t.deps);
     expect(t.err.text()).not.toContain(MESSAGE);
     expect(t.out.text()).not.toContain(MESSAGE);
+  });
+});
+
+describe('backstop: with the flag off, no Codex adapter method is ever called', () => {
+  it('up, install, start, respawn, and update reach none of launch, launchAll, installPlugin, updatePlugin', async () => {
+    const called: string[] = [];
+    const trap = (name: string) => async () => {
+      called.push(name);
+      throw new Error(`codex adapter ${name} was called`);
+    };
+    const adapters = {
+      codex: { ...codexAdapter, launch: trap('launch'), launchAll: trap('launchAll'), installPlugin: trap('installPlugin'), updatePlugin: trap('updatePlugin') },
+    } as unknown as Partial<Record<HarnessId, Adapter>>;
+    const fetchLatest = async () => ({ status: 'not-published' as const });
+    const rig = () => withFlag(installedOn('codex', 'file-mailbox', { adapters, fetchLatest }), OFF);
+    const team = { version: 1 as const, harness: 'codex' as const, transport: 'file-mailbox' as const, sessions: [{ name: 'main', pid: 41000, session_id: null }] };
+
+    const runs: string[][] = [
+      ['up', '--harness', 'codex', '--yes'],
+      ['install', '--harness', 'codex', '--non-interactive'],
+      ['install'],
+      ['start'],
+      ['respawn', 'main'],
+      ['update'],
+      ['update', '--check'],
+    ];
+    for (const argv of runs) {
+      const t = rig();
+      if (argv[0] === 'respawn') writeTeam(t.env, team);
+      expect(await main(argv, t.deps)).toBe(2);
+      expect(t.err.text()).toContain(MESSAGE);
+    }
+    expect(called).toEqual([]);
   });
 });
 
@@ -231,6 +311,12 @@ describe('Claude Code never reads the flag', () => {
 
     const update = watched(installedOn('claude-code', 'native', { fetchLatest: async () => ({ status: 'not-published' as const }) }), reads);
     expect(await main(['update', '--check'], update.deps)).toBe(0);
+
+    const respawn = watched(installedOn('claude-code', 'native'), reads);
+    writeTeam(respawn.env, { version: 1, harness: 'claude-code', transport: 'native', sessions: [{ name: 'main', pid: null, session_id: null }] });
+    expect(await main(['respawn', 'main'], respawn.deps)).toBe(1);
+    expect(respawn.err.text()).toContain('cannot stop main');
+    expect(respawn.err.text()).not.toContain(MESSAGE);
 
     expect(reads).not.toContain(VARIABLE);
   });

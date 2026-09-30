@@ -29,6 +29,15 @@ export interface UpdateOptions {
 
 /** Compares the CLI with the registry, updates the plugin, and prints the harness's own update command. */
 export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<number> {
+  // The record is read first. With Codex recorded and the flag off, nothing is fetched, printed, updated, or written.
+  const stored = readInstallRecord(deps.env);
+  if (stored.ok && stored.record?.harness === 'codex') {
+    const experimental = codexExperimentalProblem(deps.env.vars);
+    if (experimental !== undefined) {
+      deps.err(experimental);
+      return EXIT_USAGE;
+    }
+  }
   const current = cliVersion();
   const fetched = await (deps.fetchLatest ?? npmFetchLatest)(PACKAGE_NAME);
   // The registry's value is printed, so a value that is not a version is an error, never echoed.
@@ -47,7 +56,6 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
     deps.err(`trellis-crew CLI: installed ${current}, latest on npm: could not be read (${latest.message}).`);
   }
 
-  const stored = readInstallRecord(deps.env);
   if (!stored.ok) {
     deps.err(stored.message);
     return EXIT_RUNTIME;
@@ -55,14 +63,6 @@ export async function runUpdate(options: UpdateOptions, deps: CliDeps): Promise<
   if (!stored.record) {
     deps.err('No install record. Run trellis-crew install first.');
     return EXIT_RUNTIME;
-  }
-  // Codex is behind an experimental flag in this version. Nothing is updated or written before this.
-  if (stored.record.harness === 'codex') {
-    const experimental = codexExperimentalProblem(deps.env.vars);
-    if (experimental !== undefined) {
-      deps.err(experimental);
-      return EXIT_USAGE;
-    }
   }
   const record = { ...stored.record };
   const harness = HARNESSES.find((h) => h.id === record.harness);

@@ -56,7 +56,28 @@ const INSTALL_HINTS: InstallHints = {
   recordDamaged: 'Run trellis-crew install --reconfigure to write it again.',
 };
 
+/**
+ * The Codex refusal, when install would choose Codex from a flag or from
+ * install.yml and the experimental flag is off. It runs before install
+ * prints, probes, or asks anything.
+ */
+function codexRefusal(options: InstallOptions, deps: CliDeps): string | undefined {
+  // The variable is read only when Codex is the harness in question, never for another harness.
+  // The names the harness look-up accepts for Codex: its id and its display name.
+  if (options.harness !== undefined) {
+    return ['codex', 'codex cli'].includes(options.harness.trim().toLowerCase()) ? codexExperimentalProblem(deps.env.vars) : undefined;
+  }
+  if (options.reconfigure) return undefined;
+  const stored = readInstallRecord(deps.env);
+  return stored.ok && stored.record?.harness === 'codex' ? codexExperimentalProblem(deps.env.vars) : undefined;
+}
+
 async function chooseHarness(options: InstallOptions, deps: CliDeps): Promise<{ ok: true; harness: HarnessInfo; stored?: Transport } | { ok: false; code: number }> {
+  const early = codexRefusal(options, deps);
+  if (early !== undefined) {
+    deps.err(early);
+    return { ok: false, code: EXIT_USAGE };
+  }
   const stored = readInstallRecord(deps.env);
   if (!stored.ok && !options.reconfigure) {
     deps.err(stored.message);
@@ -69,7 +90,17 @@ async function chooseHarness(options: InstallOptions, deps: CliDeps): Promise<{ 
     deps.out(`Using ${harness.displayName}, stored in install.yml. Run trellis-crew install --reconfigure to choose again.`);
     return { ok: true, harness, stored: record.transport };
   }
-  const candidates = options.harness === undefined ? await probeHarnesses(deps.env, deps.runner, { warn: deps.err }) : [];
+  // Only auto-detect reads the variable here, because it must decide whether to probe Codex at all.
+  const codexOff = options.harness === undefined ? codexExperimentalProblem(deps.env.vars) : undefined;
+  const candidates =
+    options.harness === undefined
+      ? await probeHarnesses(deps.env, deps.runner, { warn: deps.err, ...(codexOff === undefined ? {} : { skip: ['codex'] as const }) })
+      : [];
+  // With the flag off, Codex is never probed. If it is the only harness here, say why it is not offered.
+  if (codexOff !== undefined && options.harness === undefined && candidates.length === 0 && findBinary('codex', deps.env.path) !== undefined) {
+    deps.err(codexOff);
+    return { ok: false, code: EXIT_USAGE };
+  }
   const result = await confirmHarness({
     candidates,
     ...(options.harness === undefined ? {} : { harnessFlag: options.harness }),

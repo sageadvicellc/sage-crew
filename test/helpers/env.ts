@@ -21,7 +21,8 @@ export function makeTestEnv(overrides: Partial<Env> = {}): Env {
     cwd: home,
     stdinIsTTY: false,
     // The experimental Codex flag is on by default here, so the Codex tests reach the code they test.
-    // test/codex-flag.test.ts sets the variable itself, off and on.
+    // test/codex-flag.test.ts sets the variable itself, off and on. Any new gate test must set the
+    // variable itself too, and never rely on this default. A test that leaves it on cannot see a gate.
     vars: { HOME: home, PATH: path, TRELLIS_EXPERIMENTAL_CODEX: '1' },
     ...overrides,
   };

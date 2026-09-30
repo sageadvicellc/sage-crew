@@ -54,6 +54,16 @@ export function harnessMismatch(loaded: Extract<LoadResult, { ok: true }>, harne
  * folder, and launches every session. `start` and `up` both run it.
  */
 export async function runStart(options: StartOptions, deps: CliDeps): Promise<number> {
+  // With Codex recorded and the flag off, stop before a roles file is listed or a question asked.
+  // planLaunch keeps the same check as the backstop for a roles file that names Codex.
+  const installed = readInstallRecord(deps.env);
+  if (installed.ok && installed.record?.harness === 'codex') {
+    const experimental = codexExperimentalProblem(deps.env.vars);
+    if (experimental !== undefined) {
+      deps.err(experimental);
+      return EXIT_USAGE;
+    }
+  }
   const loaded = loadForHarness(
     {
       env: deps.env,
