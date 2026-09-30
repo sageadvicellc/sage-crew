@@ -253,6 +253,9 @@ describe('up --harness codex', () => {
         'sandbox_workspace_write.network_access=false',
         '-c',
         `sandbox_workspace_write.writable_roots=[${JSON.stringify(mailbox)}]`,
+        // The role's shipped skill, as one -c just before --.
+        '-c',
+        expect.stringMatching(/^developer_instructions="/),
         '--',
       ]);
       expect(session.args.at(-1)).toMatch(/You are|trellis-crew start-up/);

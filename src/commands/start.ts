@@ -220,7 +220,7 @@ export function prepareSession(
     transport: plan.transport,
     ...(plan.mailbox === undefined ? {} : { mailboxPath: plan.mailbox }),
   });
-  return { name: session.name, kickoff, flagArgs: args };
+  return { name: session.name, role: session.role, kickoff, flagArgs: args };
 }
 
 function contextFor(plan: LaunchPlan, deps: CliDeps): AdapterContext {
@@ -242,7 +242,7 @@ export async function launchSession(
   overrides: LaunchValues = {},
 ): Promise<{ ok: true; entry: TeamEntry } | { ok: false; message: string }> {
   const item = prepareSession(config, session, plan, deps, overrides);
-  const outcome = await plan.adapter.launch(item.name, item.kickoff, item.flagArgs, contextFor(plan, deps));
+  const outcome = await plan.adapter.launch(item.name, item.kickoff, item.flagArgs, contextFor(plan, deps), item.role);
   if (outcome.ok && outcome.entry.pid !== null) {
     const started = startedOf(deps.runner.startTime(outcome.entry.pid));
     if (started !== undefined) outcome.entry.started = started;
@@ -308,7 +308,7 @@ async function launchSupervised(config: RolesConfig, plan: LaunchPlan, record: T
   };
   if (!outcome.ok) {
     rmSync(teamJsonPath(deps.env), { force: true });
-    deps.err(`The supervisor could not start: ${outcome.message}`);
+    deps.err(outcome.notStarted ? `Nothing was started: ${outcome.message}` : `The supervisor could not start: ${outcome.message}`);
     return EXIT_RUNTIME;
   }
   record.supervisor_pid = outcome.supervisorPid;

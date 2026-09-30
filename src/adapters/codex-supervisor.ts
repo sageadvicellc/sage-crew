@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processStartTime, startedOf } from '../runner.ts';
+import type { Role } from '../roles/schema.ts';
 import { readTeamFile, writeTeamFile } from '../store/team-json.ts';
 import { execArgsProblem } from './codex-args.ts';
 import { checkWorkdirSync, codexChildEnv } from './codex-guard.ts';
@@ -14,7 +15,8 @@ export interface SupervisorJob {
   /** The home folder, which is never a working folder. */
   home: string;
   teamPath: string;
-  sessions: { name: string; args: string[] }[];
+  /** Each session's role, so the supervisor can build its role instructions again and compare them. */
+  sessions: { name: string; role: Role; args: string[] }[];
   /** Never set. The supervisor reads its own pid, so the job file cannot name the wrong one. */
   supervisorPid?: undefined;
 }
@@ -25,18 +27,36 @@ export interface SupervisorOptions {
   pollMs?: number;
   /** How long to wait for the team record to name this supervisor. */
   waitMs?: number;
-  /** Reports a refused child. Unset: standard error and codex-supervisor.log beside the team record. */
+  /** Reports a refused or failed child. Unset: standard error and codex-supervisor.log beside the team record. */
   warn?: (line: string) => void;
 }
 
-/** The default report for a refused child. The CLI starts the supervisor with no terminal, so the log file keeps the line. */
+const LOG_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+
+/**
+ * The default report for a refused or failed child. The CLI starts the supervisor with
+ * no terminal, so the log file keeps the line. The log is opened with no
+ * link followed. A refused or failed write is reported on standard error,
+ * and never ends the supervisor.
+ */
 function defaultWarn(teamPath: string): (line: string) => void {
+  const logPath = join(dirname(teamPath), 'codex-supervisor.log');
   return (line) => {
     process.stderr.write(`${line}\n`);
+    let fd: number | undefined;
     try {
-      appendFileSync(join(dirname(teamPath), 'codex-supervisor.log'), `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
-    } catch {
-      // Standard error still has the line.
+      fd = openSync(logPath, LOG_FLAGS, 0o600);
+      writeSync(fd, `${new Date().toISOString()} ${line}\n`);
+    } catch (error) {
+      process.stderr.write(`trellis-crew supervisor: could not write ${logPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // A failed close never ends the supervisor.
+        }
+      }
     }
   };
 }
@@ -56,6 +76,15 @@ function recordPid(teamPath: string, name: string, pid: number): void {
   entry.pid = pid;
   const started = startedOf(processStartTime(pid));
   if (started !== undefined) entry.started = started;
+  writeTeamFile(teamPath, team.record);
+}
+
+/** Writes why a child failed onto its team entry, so status prints it. */
+function recordError(teamPath: string, name: string, error: string): void {
+  const team = readTeamFile(teamPath);
+  const entry = team.ok ? team.record?.sessions.find((s) => s.name === name) : undefined;
+  if (!team.ok || !team.record || !entry) return;
+  entry.error = error;
   writeTeamFile(teamPath, team.record);
 }
 
@@ -87,6 +116,10 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
   };
 
   const warn = options.warn ?? defaultWarn(job.teamPath);
+  const fail = (name: string, error: string): void => {
+    warn(`trellis-crew supervisor: ${name}: ${error}`);
+    recordError(job.teamPath, name, error);
+  };
   const startAll = (): void => {
     // Every child can write the working folder, so it is checked again here, before any child starts.
     const workdir = checkWorkdirSync(job.cwd, job.home);
@@ -97,24 +130,29 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
     for (const session of job.sessions) {
       if (stopping) break;
       // Defense in depth: the CLI built these arguments, and the supervisor checks them again before it runs any.
-      const problem = execArgsProblem(session.args);
+      // The role from the job file is checked against the four roles, and its value is built again from the shipped skill.
+      const problem = execArgsProblem(session.args, session.role);
       if (problem !== undefined) {
-        warn(`trellis-crew supervisor: ${session.name}: refused, so it was not started: ${problem}`);
+        fail(session.name, `refused, so it was not started: ${problem}`);
         continue;
       }
       const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: codexChildEnv(process.env) });
-      child.once('error', () => {
+      let failed = false;
+      child.once('error', (error) => {
+        failed = true;
+        if (!stopping) fail(session.name, `could not start: ${error.message}`);
         children.delete(session.name);
         settleWhenEmpty();
       });
-      child.once('exit', () => {
+      child.once('exit', (code, signal) => {
+        // A child that stop ended, or one already reported, is not recorded again.
+        if (!stopping && !failed && code !== 0) fail(session.name, code === null ? `ended by signal ${signal ?? 'unknown'}` : `exited with code ${code}`);
         children.delete(session.name);
         settleWhenEmpty();
       });
-      if (child.pid !== undefined) {
-        children.set(session.name, child);
-        recordPid(job.teamPath, session.name, child.pid);
-      }
+      // Tracked even with no pid, so the supervisor waits for a failed spawn's 'error' event before it ends.
+      children.set(session.name, child);
+      if (child.pid !== undefined) recordPid(job.teamPath, session.name, child.pid);
     }
     settleWhenEmpty();
   };

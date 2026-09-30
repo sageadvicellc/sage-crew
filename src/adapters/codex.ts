@@ -6,15 +6,12 @@ import { writeFileAtomic } from '../fs-atomic.ts';
 import { ensurePrivateFolder } from '../fs-private.ts';
 import { CODEX_FLAGS, codexExecArgs } from './codex-args.ts';
 import { checkWorkdir, codexChildEnv, codexMailboxProblem } from './codex-guard.ts';
+import { packageSkillsDir } from './codex-instructions.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
 export { CODEX_FLAGS, codexExecArgs, codexSandboxArgs, execArgsProblem, refusedCodexFlag } from './codex-args.ts';
-
-/** The skill folders this package carries, one per skill. */
-export function packageSkillsDir(): string {
-  return fileURLToPath(new URL('../../skills/', import.meta.url));
-}
+export { packageSkillsDir };
 
 /** The folder Codex CLI reads user skills from. */
 export function codexSkillsDir(home: string): string {
@@ -79,9 +76,9 @@ export const codexAdapter: Adapter = {
   mailboxProblem: codexMailboxProblem,
 
   /** Starts one session on its own, for respawn. */
-  async launch(name, kickoff, flagArgs, ctx) {
+  async launch(name, kickoff, flagArgs, ctx, role) {
     try {
-      const args = codexExecArgs(flagArgs, kickoff, ctx.mailbox);
+      const args = codexExecArgs(flagArgs, kickoff, ctx.mailbox, role);
       const refused = await placeProblem(ctx);
       if (refused !== undefined) return { ok: false, message: refused };
       const { pid } = await ctx.runner.spawnDetached(ctx.binaryPath, args, { env: codexChildEnv(ctx.env.vars), cwd: ctx.env.cwd });
@@ -96,13 +93,14 @@ export const codexAdapter: Adapter = {
     const sessions: SupervisorJob['sessions'] = [];
     for (const item of items) {
       try {
-        sessions.push({ name: item.name, args: codexExecArgs(item.flagArgs, item.kickoff, ctx.mailbox) });
+        sessions.push({ name: item.name, role: item.role, args: codexExecArgs(item.flagArgs, item.kickoff, ctx.mailbox, item.role) });
       } catch (error) {
-        return { ok: false, message: `${item.name}: ${errorMessage(error)}` };
+        return { ok: false, notStarted: true, message: `${item.name}: ${errorMessage(error)}` };
       }
     }
     const refused = await placeProblem(ctx);
     if (refused !== undefined) return { ok: false, message: refused };
+    ctx.out('Role text: each Codex session gets the shipped default skill for its role. Each kickoff still comes from the roles file, or from the default team.');
     const job: SupervisorJob = { binary: ctx.binaryPath, cwd: ctx.env.cwd, home: ctx.env.home, teamPath, sessions };
     const jobPath = join(stateDir(ctx.env), 'codex-supervisor.json');
     try {

@@ -105,9 +105,9 @@ describe('the Codex working folder: the adapter refuses before it writes the job
       const env = makeTestEnv({ home: name === 'the home folder' ? cwd : home, cwd });
       const mailbox = join(env.home, '.trellis-crew', 'mailbox');
       const all = ctxFor(env, mailbox);
-      const outcome = await codexAdapter.launchAll?.([{ name: 'main', kickoff: 'k', flagArgs: [] }], all, join(env.home, 'team.json'));
+      const outcome = await codexAdapter.launchAll?.([{ name: 'main', role: 'lead', kickoff: 'k', flagArgs: [] }], all, join(env.home, 'team.json'));
       const one = ctxFor(env, mailbox);
-      const single = await codexAdapter.launch('main', 'k', [], one);
+      const single = await codexAdapter.launch('main', 'k', [], one, 'lead');
       if (reason === null) {
         expect(outcome).toMatchObject({ ok: true });
         expect(single).toMatchObject({ ok: true });
@@ -138,7 +138,7 @@ function supervisorRig(cwd: string, home: string) {
   chmodSync(bin, 0o755);
   const teamPath = join(dir, 'team.json');
   writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
-  const job: SupervisorJob = { binary: bin, cwd, home, teamPath, sessions: [{ name: 'main', args: codexExecArgs([], 'k', undefined) }] };
+  const job: SupervisorJob = { binary: bin, cwd, home, teamPath, sessions: [{ name: 'main', role: 'lead', args: codexExecArgs([], 'k', undefined, 'lead') }] };
   return { job, teamPath };
 }
 
@@ -252,13 +252,13 @@ describe('the Codex working folder holds no other git repository, at depth 1 to 
 
     const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
     const all = ctxFor(t.env, mailbox);
-    expect(await codexAdapter.launchAll?.([{ name: 'main', kickoff: 'k', flagArgs: [] }], all, join(t.env.home, 'team.json'))).toEqual({
+    expect(await codexAdapter.launchAll?.([{ name: 'main', role: 'lead', kickoff: 'k', flagArgs: [] }], all, join(t.env.home, 'team.json'))).toEqual({
       ok: false,
       message: expect.stringMatching(reason),
     });
     expect(existsSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json'))).toBe(false);
     const one = ctxFor(t.env, mailbox);
-    expect(await codexAdapter.launch('main', 'k', [], one)).toEqual({ ok: false, message: expect.stringMatching(reason) });
+    expect(await codexAdapter.launch('main', 'k', [], one, 'lead')).toEqual({ ok: false, message: expect.stringMatching(reason) });
     expect([...all.runner.calls, ...one.runner.calls].filter((c) => !isGitCall(c))).toEqual([]);
 
     const { job, teamPath } = supervisorRig(t.env.cwd, t.env.home);
@@ -343,12 +343,12 @@ describe('the Codex working folder does not hold its own git hooks folder', () =
 
     const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
     const all = ctxFor(t.env, mailbox);
-    expect(await codexAdapter.launchAll?.([{ name: 'main', kickoff: 'k', flagArgs: [] }], all, join(t.env.home, 'team.json'))).toEqual({
+    expect(await codexAdapter.launchAll?.([{ name: 'main', role: 'lead', kickoff: 'k', flagArgs: [] }], all, join(t.env.home, 'team.json'))).toEqual({
       ok: false,
       message: expect.stringMatching(inside),
     });
     expect(existsSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json'))).toBe(false);
-    expect(await codexAdapter.launch('main', 'k', [], ctxFor(t.env, mailbox))).toEqual({ ok: false, message: expect.stringMatching(inside) });
+    expect(await codexAdapter.launch('main', 'k', [], ctxFor(t.env, mailbox), 'lead')).toEqual({ ok: false, message: expect.stringMatching(inside) });
 
     const { job } = supervisorRig(t.env.cwd, t.env.home);
     const warnings: string[] = [];
@@ -790,7 +790,7 @@ describe('the Codex child environment is an allowlist', () => {
       seen = options?.env;
       return { pid: 41000 };
     };
-    expect(await codexAdapter.launch('main', 'k', [], ctx)).toMatchObject({ ok: true });
+    expect(await codexAdapter.launch('main', 'k', [], ctx, 'lead')).toMatchObject({ ok: true });
     expect(seen).toEqual(listed);
   });
 });

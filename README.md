@@ -163,6 +163,12 @@ that you set and prints a warning that names the session and the field.
   at once. The supervisor starts each `codex exec` process and records
   its process ID. `stop` ends the supervisor and each session. See
   "The Codex CLI sandbox" below.
+
+  Each Codex session gets its role's default skill, such as
+  `department-lead` for a lead, through `developer_instructions`. Codex
+  adds these to its own instructions and does not replace them. When a
+  session starts, the CLI reads the skill from this package. It never
+  reads role text from your roles file.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.
@@ -198,16 +204,23 @@ them again.
 The CLI never uses `danger-full-access` or
 `--dangerously-bypass-approvals-and-sandbox`. Codex CLI has no verified
 launch flag, so the CLI refuses every launch flag and every bare word
-before the prompt. The supervisor checks each session's arguments again
-before it starts that session. If the arguments are wrong, it refuses
-that session and writes the reason to `codex-supervisor.log` in the
-state folder.
+before the prompt. The CLI adds one more `-c` itself, for the session's
+`developer_instructions`. The supervisor checks each session's arguments
+again before it starts that session. For that one `-c`, it builds the
+value again from the shipped skill for the session's role. The two
+values must be the same. If the arguments are wrong, it refuses that
+session.
+It writes the reason to `codex-supervisor.log` in the state folder and
+to the session's entry in `team.json`, and `status` prints it.
 
 The sandbox lets each session write its working folder. So the CLI
 starts Codex CLI sessions only at the top of a git worktree. The CLI
 runs `git rev-parse --show-toplevel` in the current folder. The answer
 must be that same folder, after both paths resolve through any links.
 The CLI also refuses your home folder and `/`. It refuses a folder that
+is, or holds, this package's `skills` folder. With an `npm link`
+install, that folder is in the trellis-crew checkout. A session there
+can change the role text that each later start sends. It refuses a folder that
 holds another git repository one to three levels below it. It follows
 no symbolic link during that search. It refuses a folder whose
 `core.hooksPath` points inside it, because a session can write a git

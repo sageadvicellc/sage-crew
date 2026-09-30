@@ -1,6 +1,11 @@
 import { isAbsolute } from 'node:path';
 import { printable } from '../printable.ts';
+import { ROLES, type Role } from '../roles/schema.ts';
+import { roleInstructionsArgs } from './codex-instructions.ts';
 import type { Adapter } from './types.ts';
+
+/** The key of the one `-c` that carries the role instructions. */
+const ROLE_KEY = 'developer_instructions=';
 
 /**
  * The verified launch flag for each launch field on Codex CLI. None is
@@ -85,28 +90,55 @@ export function refusedCodexFlag(flagArgs: readonly string[], verified: Readonly
  * The arguments for one `codex exec` session. Codex documents no flag to
  * name a session, so the kickoff names it. The help shows the prompt as
  * the trailing `[PROMPT]` argument, so the kickoff follows `--`, and a
- * kickoff that starts with `-` is never read as an option. Throws when a
- * launch argument or the mailbox path is refused.
+ * kickoff that starts with `-` is never read as an option. After the
+ * sandbox arguments and before `--` comes exactly one
+ * `-c developer_instructions=<TOML string>`, the role's shipped skill.
+ * Throws when a launch argument or the mailbox path is refused, and
+ * RoleInstructionsError when the role skill cannot be read.
  */
-export function codexExecArgs(flagArgs: readonly string[], kickoff: string, mailbox: string | undefined): string[] {
+export function codexExecArgs(flagArgs: readonly string[], kickoff: string, mailbox: string | undefined, role: Role): string[] {
   const refused = refusedCodexFlag(flagArgs);
   if (refused !== undefined) throw new Error(refused);
-  return ['exec', ...flagArgs, ...codexSandboxArgs(mailbox), '--', kickoff];
+  return ['exec', ...flagArgs, ...codexSandboxArgs(mailbox), ...roleInstructionsArgs(role), '--', kickoff];
 }
 
-/** How many arguments follow the launch flags: the sandbox arguments, `--`, and the kickoff. */
-const TAIL = SANDBOX_FIXED.length + 2 + 2;
+/** How many arguments the role instructions take: `-c` and its value. */
+const ROLE_ARGS = 2;
+
+/** How many arguments follow the launch flags: the sandbox arguments, the role instructions, `--`, and the kickoff. */
+const TAIL = SANDBOX_FIXED.length + 2 + ROLE_ARGS + 2;
 
 /**
  * Returns why a full `codex exec` argument list is refused, or undefined.
  * The supervisor runs this before it starts each child. The list must be
  * `exec`, launch flags that pass the flag check, the exact sandbox
- * arguments for at most one writable root, `--`, and the kickoff.
+ * arguments for at most one writable root, one role-instructions `-c`,
+ * `--`, and the kickoff.
+ *
+ * The one `-c` this allows is `-c developer_instructions=<value>`, just
+ * before `--`, and only when it equals the value built fresh here from the
+ * shipped skill for `role`. It never allows `-c` in general. Any other
+ * `-c`, `--config`, `--config=...`, joined `-c...`, or second
+ * developer_instructions either breaks the fixed positions checked here or
+ * falls in the launch flags, which the flag check refuses. `role` comes
+ * from the job file, so it is checked against the four roles first.
  */
-export function execArgsProblem(args: readonly string[]): string | undefined {
+export function execArgsProblem(args: readonly string[], role: Role): string | undefined {
+  if (!(ROLES as readonly string[]).includes(role)) return `the role "${printable(String(role))}" is not one of ${ROLES.join(', ')}`;
   const wrong = 'the arguments are not the sandbox arguments that trellis-crew sets';
   if (args[0] !== 'exec' || args.length < 1 + TAIL || args.at(-2) !== '--') return wrong;
-  const sandbox = args.slice(-TAIL, -2);
+  const [flag, value] = args.slice(-2 - ROLE_ARGS, -2);
+  if (flag !== '-c' || value === undefined || !value.startsWith(`${ROLE_KEY}"`)) {
+    return 'the arguments do not end with the role instructions that trellis-crew sets';
+  }
+  let expectedRole: string[];
+  try {
+    expectedRole = roleInstructionsArgs(role);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (value !== expectedRole[1]) return `the developer_instructions value is not the shipped skill for the ${role} role`;
+  const sandbox = args.slice(-TAIL, -2 - ROLE_ARGS);
   const rootsArg = sandbox.at(-1) ?? '';
   if (!rootsArg.startsWith(ROOTS_KEY)) return wrong;
   let roots: unknown;

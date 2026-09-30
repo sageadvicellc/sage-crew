@@ -5,6 +5,7 @@ import { findBinary } from '../detect/probe.ts';
 import { stateDir, type Env } from '../env.ts';
 import { printable } from '../printable.ts';
 import type { Runner } from '../runner.ts';
+import { packageSkillsDir } from './codex-instructions.ts';
 
 /**
  * The guards for a Codex CLI session. workspace-write lets a session write
@@ -54,6 +55,11 @@ function real(path: string): string | undefined {
  * repository at depth 1 to 3. Git must read no config file from inside
  * it, and its hooks folder and fsmonitor command must not sit inside it.
  * The folder's own `.git` is allowed: Codex keeps it read-only.
+ *
+ * It must also not be, or hold, this package's skills folder. With an
+ * `npm link` install that folder is the trellis-crew checkout. A session
+ * there could change a role skill, and every later start would send the
+ * changed text, which the supervisor's check would then accept.
  */
 function workdirProblem(folder: string, home: string, git: Git): string | undefined {
   const why = (reason: string) => `${WORKDIR_RULE} ${printable(folder)}: ${reason}.`;
@@ -61,6 +67,11 @@ function workdirProblem(folder: string, home: string, git: Git): string | undefi
   if (realFolder === undefined) return why('the folder cannot be read');
   if (realFolder === sep) return why('it is the root folder');
   if (realFolder === (real(home) ?? resolve(home))) return why('it is your home folder');
+  const skills = real(packageSkillsDir());
+  if (skills !== undefined && (skills === realFolder || within(skills, realFolder))) {
+    const where = skills === realFolder ? 'is the working folder itself' : 'is inside it';
+    return why(`this package's skills folder, ${printable(skills)}, ${where}, so a session could change the role text that every later start sends`);
+  }
   const top = git(GIT_TOP);
   if (top.code !== 0) return why(`it is not in a git worktree (${top.reason || `git exited with code ${String(top.code)}`})`);
   const topPath = firstLine(top.stdout);
