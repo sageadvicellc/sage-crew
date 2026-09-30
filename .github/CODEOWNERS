@@ -7,3 +7,5 @@
 /.sanitize-allow @hannasage
 /src/sanitize/ @hannasage
 /src/adapters/codex-supervisor.ts @hannasage
+/src/adapters/codex-args.ts @hannasage
+/src/adapters/codex-guard.ts @hannasage
