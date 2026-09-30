@@ -1294,6 +1294,21 @@ describe('.git/info swapped for a link during the export', () => {
   });
 });
 
+describe('the shared git environment helper', () => {
+  it('comes from codex-guard.ts, and codex-skills.ts keeps no copy of its own', async () => {
+    const guard = (await import('../src/adapters/codex-guard.ts')) as Record<string, unknown>;
+    const skills = (await import('../src/adapters/codex-skills.ts')) as Record<string, unknown>;
+    expect(typeof guard.withoutGitVars).toBe('function');
+    const strip = guard.withoutGitVars as (vars: Record<string, string | undefined>) => Record<string, string>;
+    expect(strip({ GIT_DIR: '/x', GIT_WORK_TREE: '/y', HOME: '/h', PATH: '/p', UNSET: undefined })).toEqual({ HOME: '/h', PATH: '/p' });
+    expect('withoutGitVars' in skills).toBe(false);
+    const source = readFileSync(join(repoRoot, 'src', 'adapters', 'codex-skills.ts'), 'utf8');
+    expect(source).toMatch(/import \{[^}]*\bwithoutGitVars\b[^}]*\} from '\.\/codex-guard\.ts'/);
+    expect(source).not.toMatch(/function withoutGitVars/);
+    expect(source).not.toMatch(/once that lands|mirrors `withoutGitVars`/);
+  });
+});
+
 describe('git variables in the parent environment', () => {
   it('are removed, so the top check, the tracked check, and the exclude path see the real repository', async () => {
     const other = makeFixtureRepo();

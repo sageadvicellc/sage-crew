@@ -235,6 +235,9 @@ describe('up --harness codex', () => {
     const gitArgs = t.runner.gitCalls.map((c) => c.args);
     expect(gitArgs.filter((args) => args.join('\0') === toplevel.join('\0'))).toHaveLength(3);
     expect(gitArgs.filter((args) => args.join('\0') === settings.join('\0'))).toHaveLength(2);
+    // The order: the working-folder check comes first, its top and then its settings,
+    // before the export's own worktree-top check.
+    expect(gitArgs.slice(0, 3)).toEqual([toplevel, settings, toplevel]);
     const job = supervisorJob(t);
     expect(job.binary).toBe(join(fixtureBin, 'codex'));
     expect(job.sessions).toHaveLength(6);

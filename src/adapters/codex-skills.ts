@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import type { Env } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
 import type { Runner, RunResult } from '../runner.ts';
+import { withoutGitVars } from './codex-guard.ts';
 import type { PluginCheck, PluginOutcome } from './types.ts';
 
 /**
@@ -116,15 +117,10 @@ export interface ExportContext {
 type Git = (args: readonly string[]) => Promise<RunResult>;
 
 /**
- * The environment without any GIT_* variable. A GIT_DIR, GIT_WORK_TREE,
- * GIT_INDEX_FILE, or GIT_COMMON_DIR from the parent would point these git
- * calls at another repository. It mirrors `withoutGitVars` in
- * trellis-crew#24.
+ * Runs git in `cwd` with every GIT_ variable removed. A GIT_DIR,
+ * GIT_WORK_TREE, GIT_INDEX_FILE, or GIT_COMMON_DIR from the parent would
+ * point these git calls at another repository.
  */
-export function withoutGitVars(vars: Readonly<Record<string, string | undefined>>): Record<string, string | undefined> {
-  return Object.fromEntries(Object.entries(vars).filter(([key]) => !key.startsWith('GIT_')));
-}
-
 function gitIn(ctx: Pick<ExportContext, 'env' | 'runner'>, cwd: string): Git {
   const env = withoutGitVars(ctx.env.vars);
   return (args) => ctx.runner.run('git', args, { cwd, env, timeoutMs: GIT_TIMEOUT_MS });
@@ -142,8 +138,11 @@ export type TopResult = { ok: true; top: string } | { ok: false; message: string
  * after realpath must equal `git rev-parse --show-toplevel` after realpath,
  * and it is never the home folder or `/`.
  *
- * This is a small local guard. It should merge with `workdirProblem` in
- * `src/adapters/codex-guard.ts` (trellis-crew#24) once that lands.
+ * This guard stays apart from `workdirProblem` in
+ * `src/adapters/codex-guard.ts` on purpose. It checks less: only the top,
+ * the home folder, and `/`, with no check of git settings. And plain
+ * `install` runs it on its own; only `up` and a session start run the
+ * working-folder check.
  */
 export async function projectTop(env: Env, runner: Runner): Promise<TopResult> {
   let folder: string;

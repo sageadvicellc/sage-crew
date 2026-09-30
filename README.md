@@ -196,6 +196,12 @@ command stops and names the step. It also stops for your home folder
 and for `/`. The CLI ignores any `GIT_` variable in your shell for its
 git steps, so it always reads the repository in that folder.
 
+The skill export in `install` and `update` does not run the session
+checks that `up` and `start` run, such as the `core.hooksPath` check. So
+`install --harness codex` can copy skills into a worktree where `up` or
+`start` then refuses to start a session. That is not a way out of the
+checks, because no session starts there.
+
 Under the workspace-write sandbox, "`<writable_root>/.agents` is
 protected as read-only when it exists as a directory". The Codex
 approvals and security page says so
