@@ -121,7 +121,8 @@ const GIT_BOOLEAN = /^(true|false|yes|no|on|off|1|0)$/i;
  *   its own top-level `.git` folder, either as an entry's origin or as the
  *   target of an include, so an empty include counts too
  * - a `core.hooksPath` that resolves inside the working folder
- * - a `core.fsmonitor` command that resolves inside the working folder
+ * - a command key, such as `core.fsmonitor` or `filter.*.clean`, whose
+ *   value names a path inside the working folder (see commandProblem)
  * Relative hooks and fsmonitor paths resolve against the worktree top, and
  * relative include paths against the including file's folder. Every entry
  * is checked, not only the last one. Any git failure refuses, so the check
@@ -156,12 +157,94 @@ function configProblem(top: string, home: string, answer: GitAnswer): string | u
         return `core.hooksPath is ${printable(value)}, which resolves to ${printable(resolved)}, inside the working folder, so a session could write a git hook`;
       }
     }
-    if (entry.key === 'core.fsmonitor' && entry.value !== undefined && !GIT_BOOLEAN.test(entry.value)) {
-      const resolved = resolveConfigPath(entry.value, top, home);
-      if (resolved === undefined) return otherHome('core.fsmonitor', entry.value);
-      if (inside(resolved)) {
-        return `core.fsmonitor is ${printable(entry.value)}, which resolves to ${printable(resolved)}, inside the working folder, so a session could write the command git runs`;
-      }
+    const command = commandProblem(entry, top, home);
+    if (command !== undefined) return command;
+  }
+  return undefined;
+}
+
+/** A config key pattern: the section, the subsection (`*` for any, null for none), and the variable (`*` for any). */
+type KeyPattern = [section: string, subsection: '*' | null, variable: string];
+
+/** The keys whose value is a command that git runs, often through a shell. */
+const COMMAND_KEYS: readonly KeyPattern[] = [
+  ['core', null, 'fsmonitor'],
+  ['core', null, 'sshcommand'],
+  ['core', null, 'editor'],
+  ['core', null, 'pager'],
+  ['core', null, 'askpass'],
+  ['core', null, 'gitproxy'],
+  ['sequence', null, 'editor'],
+  ['alias', null, '*'],
+  ['pager', null, '*'],
+  ['filter', '*', 'clean'],
+  ['filter', '*', 'smudge'],
+  ['filter', '*', 'process'],
+  ['diff', null, 'external'],
+  ['diff', '*', 'textconv'],
+  ['diff', '*', 'command'],
+  ['merge', '*', 'driver'],
+  ['difftool', '*', 'cmd'],
+  ['mergetool', '*', 'cmd'],
+  ['gpg', null, 'program'],
+  ['gpg', '*', 'program'],
+  ['credential', null, 'helper'],
+  ['credential', '*', 'helper'],
+  ['remote', '*', 'uploadpack'],
+  ['remote', '*', 'receivepack'],
+];
+
+/**
+ * Splits a config key into its section, subsection, and variable. Git
+ * lowercases the section and the variable, and the subsection keeps its
+ * case and may hold dots, as a credential URL does.
+ */
+function splitKey(key: string): { section: string; subsection: string | null; variable: string } {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  if (first === -1) return { section: key.toLowerCase(), subsection: null, variable: '' };
+  return {
+    section: key.slice(0, first).toLowerCase(),
+    subsection: first === last ? null : key.slice(first + 1, last),
+    variable: key.slice(last + 1).toLowerCase(),
+  };
+}
+
+function isCommandKey(key: string): boolean {
+  const { section, subsection, variable } = splitKey(key);
+  return COMMAND_KEYS.some(
+    ([s, sub, v]) => s === section && (sub === null ? subsection === null : subsection !== null) && (v === '*' || v === variable),
+  );
+}
+
+/** The characters a shell splits or expands at. The word test splits there too. */
+const SHELL_SPLIT = /[\s;&|(){}<>`$"'!]+/;
+
+/**
+ * Refuses a command key whose value names a path inside the working
+ * folder. The value is split into words at white space and at each shell
+ * character. A word with a `/`, or one that starts with `.` or `~`, is a
+ * path, which resolves against the worktree top. A word with no `/`, such
+ * as `%f` or `git-lfs`, is not a path. This is not a shell parser: a
+ * command found on PATH, or a path built at run time, is not seen.
+ * - `core.fsmonitor` passes as a boolean, and an empty one is refused.
+ * - `alias.*` counts only when it starts with `!`, which runs a shell.
+ */
+function commandProblem(entry: ConfigEntry, top: string, home: string): string | undefined {
+  if (!isCommandKey(entry.key) || entry.value === undefined) return undefined;
+  const { section, variable } = splitKey(entry.key);
+  const value = entry.value;
+  if (section === 'core' && variable === 'fsmonitor') {
+    if (GIT_BOOLEAN.test(value)) return undefined;
+    if (value.trim() === '') return `${entry.key} is empty, so it cannot be checked`;
+  }
+  if (section === 'alias' && !value.startsWith('!')) return undefined;
+  for (const word of value.split(SHELL_SPLIT)) {
+    if (word === '' || !(word.includes('/') || word.startsWith('.') || word.startsWith('~'))) continue;
+    const resolved = resolveConfigPath(word, top, home);
+    if (resolved === undefined) return `${entry.key} is ${printable(value)}, which names another user's home folder, so it cannot be checked`;
+    if (resolved === top || within(resolved, top)) {
+      return `${entry.key} is ${printable(value)}, and the path ${printable(word)} in it resolves to ${printable(resolved)}, inside the working folder, so a session could write the command git runs`;
     }
   }
   return undefined;

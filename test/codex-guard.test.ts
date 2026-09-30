@@ -402,7 +402,7 @@ describe('the Codex working folder feeds git no config file or fsmonitor command
     const inside = makeFixtureRepo();
     inside.git('config', 'core.fsmonitor', join('tools', 'watch'));
     for (const problem of await both(inside.root)) {
-      expect(problem).toMatch(/: core\.fsmonitor is tools\/watch, which resolves to .*, inside the working folder, so a session could write the command git runs\.$/);
+      expect(problem).toMatch(commandInside('core.fsmonitor', 'tools/watch', 'tools/watch'));
     }
     for (const value of ['true', 'false', 'yes', 'no', 'on', 'off', '1', '0', 'TRUE']) {
       const repo = makeFixtureRepo();
@@ -412,6 +412,112 @@ describe('the Codex working folder feeds git no config file or fsmonitor command
     const outside = makeFixtureRepo();
     outside.git('config', 'core.fsmonitor', join(makeFixtureHome(), 'watch'));
     expect(await both(outside.root)).toEqual([undefined, undefined]);
+  });
+
+  it('still refuses an empty core.fsmonitor, and a ~user path in it', async () => {
+    const empty = makeFixtureRepo();
+    empty.git('config', 'core.fsmonitor', '');
+    for (const problem of await both(empty.root)) expect(problem).toMatch(/: core\.fsmonitor is empty, so it cannot be checked\.$/);
+    const other = makeFixtureRepo();
+    other.git('config', 'core.fsmonitor', '~someone/watch');
+    for (const problem of await both(other.root)) expect(problem).toMatch(/: core\.fsmonitor is ~someone\/watch, which names another user's home folder, so it cannot be checked\.$/);
+  });
+});
+
+/** The refusal for a command key whose path word resolves inside the working folder. */
+function commandInside(key: string, value: string, word: string): RegExp {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `: ${escape(key)} is ${escape(value)}, and the path ${escape(word)} in it resolves to .*, inside the working folder, so a session could write the command git runs\\.$`,
+  );
+}
+
+describe('the Codex working folder: a command git runs names no path inside it', () => {
+  const both = async (cwd: string, home = makeFixtureHome()): Promise<[string | undefined, string | undefined]> => [
+    await checkWorkdir(makeTestEnv({ cwd, home }), recordingRunner()),
+    checkWorkdirSync(cwd, home),
+  ];
+  const withConfig = (key: string, value: string) => {
+    const repo = makeFixtureRepo();
+    repo.git('config', key, value);
+    return repo;
+  };
+
+  it('refuses an in-tree path in every listed key, and passes the same key with a path outside', async () => {
+    const outside = join(makeFixtureHome(), 'x');
+    const keys = [
+      'core.fsmonitor', 'core.sshCommand', 'core.editor', 'core.pager', 'core.askPass', 'core.gitProxy', 'sequence.editor',
+      'pager.log', 'filter.Lfs.clean', 'filter.Lfs.smudge', 'filter.Lfs.process', 'diff.external', 'diff.Word.textconv',
+      'diff.Word.command', 'merge.Ours.driver', 'difftool.Meld.cmd', 'mergetool.Meld.cmd', 'gpg.program', 'gpg.ssh.program',
+      'credential.helper', 'credential.https://example.com.helper', 'remote.origin.uploadpack', 'remote.origin.receivepack',
+    ];
+    for (const key of keys) {
+      const shown = key.replace(/^([^.]+)\./, (_m, section: string) => `${section.toLowerCase()}.`).replace(/\.([^.]+)$/, (_m, name: string) => `.${name.toLowerCase()}`);
+      for (const problem of await both(withConfig(key, './tools/x').root)) expect(problem).toMatch(commandInside(shown, './tools/x', './tools/x'));
+      expect(await both(withConfig(key, outside).root)).toEqual([undefined, undefined]);
+    }
+  });
+
+  it('refuses an interpreter with an in-tree script, as a shell reads it', async () => {
+    const repo = withConfig('core.fsmonitor', '/bin/sh tools/fsmon.sh');
+    for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside('core.fsmonitor', '/bin/sh tools/fsmon.sh', 'tools/fsmon.sh'));
+  });
+
+  it('refuses a $(cat tools/x) form', async () => {
+    const repo = withConfig('core.editor', 'vi $(cat tools/x)');
+    for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside('core.editor', 'vi $(cat tools/x)', 'tools/x'));
+  });
+
+  it('refuses a shell alias with !./x, and passes a git alias', async () => {
+    const shell = withConfig('alias.go', '!./x');
+    for (const problem of await both(shell.root)) expect(problem).toMatch(commandInside('alias.go', '!./x', './x'));
+    const plain = withConfig('alias.lg', 'log --oneline ./docs');
+    expect(await both(plain.root)).toEqual([undefined, undefined]);
+  });
+
+  it('passes a filter such as git-lfs clean -- %f, and other words with no /', async () => {
+    expect(await both(withConfig('filter.lfs.clean', 'git-lfs clean -- %f').root)).toEqual([undefined, undefined]);
+    expect(await both(withConfig('core.pager', 'less -R').root)).toEqual([undefined, undefined]);
+  });
+
+  it('refuses core.sshcommand with ssh -i ./keys/id', async () => {
+    const repo = withConfig('core.sshCommand', 'ssh -i ./keys/id');
+    for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside('core.sshcommand', 'ssh -i ./keys/id', './keys/id'));
+  });
+
+  it('passes credential.helper=store, and refuses credential.helper=!./bin/cred', async () => {
+    expect(await both(withConfig('credential.helper', 'store').root)).toEqual([undefined, undefined]);
+    const repo = withConfig('credential.helper', '!./bin/cred');
+    for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside('credential.helper', '!./bin/cred', './bin/cred'));
+  });
+
+  it('splits at each shell character, so a quoted or chained path is still seen', async () => {
+    for (const [value, word] of [
+      ["sh -c 'tools/a'", 'tools/a'],
+      ['echo x;tools/b', 'tools/b'],
+      ['a|tools/c', 'tools/c'],
+      ['`tools/d`', 'tools/d'],
+      ['a&&tools/e', 'tools/e'],
+      ['{tools/f}', 'tools/f'],
+      ['a<tools/g', 'tools/g'],
+      ['"tools/h"', 'tools/h'],
+      ['.hidden', '.hidden'],
+    ]) {
+      const repo = withConfig('core.pager', value as string);
+      for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside('core.pager', value as string, word as string));
+    }
+  });
+
+  it('resolves ~/ against the home folder, and refuses ~user', async () => {
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.pager', `less ~/${basename(repo.root)}/tools/p`);
+    for (const problem of await both(repo.root, dirname(repo.root))) {
+      expect(problem).toMatch(commandInside('core.pager', `less ~/${basename(repo.root)}/tools/p`, `~/${basename(repo.root)}/tools/p`));
+    }
+    const other = withConfig('core.pager', 'less ~someone/p');
+    for (const problem of await both(other.root)) {
+      expect(problem).toMatch(/: core\.pager is less ~someone\/p, which names another user's home folder, so it cannot be checked\.$/);
+    }
   });
 });
 
