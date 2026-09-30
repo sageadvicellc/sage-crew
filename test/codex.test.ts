@@ -8,6 +8,8 @@ import { main } from '../src/cli.ts';
 import { processStartTime } from '../src/runner.ts';
 import { readTeam, readTeamFile, writeTeamFile } from '../src/store/team-json.ts';
 import { makeFixtureHome } from './helpers/env.ts';
+import { makeFixtureRepo } from './helpers/git-repo.ts';
+import { isGitCall } from './helpers/recording-runner.ts';
 import { fixtureBin, repoRoot } from './helpers/paths.ts';
 import { SMALL_TEAM } from './helpers/roles.ts';
 import { installedOn, writeRoles } from './helpers/team.ts';
@@ -141,9 +143,10 @@ describe('codex exec arguments', () => {
 
   it('respawn passes the mailbox as the writable root', async () => {
     const t = installedOn('codex', 'file-mailbox');
-    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {}, mailbox: '/srv/mail' };
+    const mailbox = join(t.env.home, '.trellis-crew', 'mailbox');
+    const ctx = { env: t.env, runner: t.runner, binaryPath: join(fixtureBin, 'codex'), out: () => {}, mailbox };
     expect(await codexAdapter.launch('main', 'k', [], ctx)).toMatchObject({ ok: true });
-    expect(t.runner.calls[0]?.args).toEqual([...sandboxedExec(['/srv/mail']), 'k']);
+    expect(t.runner.calls.find((c) => c.kind === 'detached')?.args).toEqual([...sandboxedExec([mailbox]), 'k']);
   });
 
   it('launchAll refuses a mailbox path with a control character, and starts nothing', async () => {
@@ -165,11 +168,13 @@ describe('codex exec arguments', () => {
 
   it('start gives each session a custom mailbox from the roles file as its writable root', async () => {
     const t = installedOn('codex', 'file-mailbox');
-    const file = writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('operator: you', 'operator: you\nmailbox: ~/team-mail'));
+    // On Codex the mailbox must sit inside the state folder, so the custom one is there.
+    const file = writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('operator: you', 'operator: you\nmailbox: ~/.trellis-crew/team-mail'));
     expect(await main(['start', '--roles', file], t.deps)).toBe(0);
     const spawn = t.runner.calls.find((c) => c.kind === 'detached');
     const job = JSON.parse(readFileSync(spawn?.args[1] as string, 'utf8')) as SupervisorJob;
-    for (const session of job.sessions) expect(session.args.slice(0, -1)).toEqual(sandboxedExec([join(t.env.home, 'team-mail')]));
+    const mailbox = join(t.env.home, '.trellis-crew', 'team-mail');
+    for (const session of job.sessions) expect(session.args.slice(0, -1)).toEqual(sandboxedExec([mailbox]));
   });
 
   it('start refuses a roles-file flag that reaches the sandbox, and starts no supervisor', async () => {
@@ -233,7 +238,8 @@ describe('Codex CLI', () => {
       message: expect.stringMatching(/^could not write the supervisor job file .*codex-supervisor\.json: .*open to other users/),
     });
     expect(existsSync(join(t.env.home, '.trellis-crew', 'codex-supervisor.json'))).toBe(false);
-    expect(t.runner.calls).toEqual([]);
+    // Only the working-folder check ran.
+    expect(t.runner.calls.filter((c) => !isGitCall(c))).toEqual([]);
   });
 
   it('46: each set field prints one warning, and the session still starts', async () => {
@@ -263,7 +269,8 @@ describe('Codex CLI', () => {
     });
     const job: SupervisorJob = {
       binary: bin,
-      cwd: dir,
+      cwd: makeFixtureRepo().root,
+      home: dir,
       teamPath,
       sessions: [
         { name: 'main', args: codexExecArgs([], 'kickoff one', dir) },
@@ -302,7 +309,8 @@ describe('Codex CLI', () => {
     const good = codexExecArgs([], 'k', dir);
     const job: SupervisorJob = {
       binary: bin,
-      cwd: dir,
+      cwd: makeFixtureRepo().root,
+      home: dir,
       teamPath,
       sessions: [
         { name: 'bare', args: ['exec', 'k'] },
@@ -333,7 +341,7 @@ describe('Codex CLI', () => {
     const teamPath = join(dir, 'team.json');
     writeTeamFile(teamPath, { version: 1, harness: 'codex', sessions: [{ name: 'main', pid: null, session_id: null }] });
     const handle = runSupervisor(
-      { binary: join(dir, 'missing'), cwd: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
+      { binary: join(dir, 'missing'), cwd: makeFixtureRepo().root, home: dir, teamPath, sessions: [{ name: 'main', args: ['exec', 'k'] }] },
       { ownPid: process.pid, pollMs: 10, waitMs: 100 },
     );
     await handle.done;

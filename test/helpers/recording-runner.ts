@@ -1,4 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { basename } from 'node:path';
 import type { ProcessStart, RunOptions, RunResult, Runner } from '../../src/runner.ts';
+
+/** True for a recorded call to git, which the working-folder check makes. */
+export function isGitCall(call: RecordedCall): boolean {
+  return basename(call.command) === 'git';
+}
 
 export interface RecordedCall {
   kind: 'run' | 'detached' | 'kill';
@@ -21,6 +28,22 @@ export interface RecordingRunner extends Runner {
 
 const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
 
+/**
+ * Answers `git rev-parse` with the real git in the call's folder, so the
+ * working-folder check reads a real temp repository. Git is not a harness,
+ * so this runs no agent session. Every other git call is refused.
+ */
+function realGit(args: readonly string[], options: RunOptions | undefined): RunResult {
+  if (args[0] !== 'rev-parse') return { code: 1, stdout: '', stderr: 'fixture: only git rev-parse is answered\n', timedOut: false };
+  try {
+    const stdout = execFileSync('git', [...args], { cwd: options?.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { code: 0, stdout, stderr: '', timedOut: false };
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    return { code: 1, stdout: '', stderr, timedOut: false };
+  }
+}
+
 export function recordingRunner(responder: Responder = () => ok): RecordingRunner {
   const calls: RecordedCall[] = [];
   const living = new Set<number>();
@@ -32,8 +55,9 @@ export function recordingRunner(responder: Responder = () => ok): RecordingRunne
     living,
     starts,
     unknown,
-    async run(command: string, args: readonly string[], _options?: RunOptions): Promise<RunResult> {
+    async run(command: string, args: readonly string[], options?: RunOptions): Promise<RunResult> {
       calls.push({ kind: 'run', command, args });
+      if (basename(command) === 'git') return realGit(args, options);
       return responder(command, args);
     },
     async spawnDetached(command: string, args: readonly string[]): Promise<{ pid: number }> {

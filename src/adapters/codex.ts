@@ -5,6 +5,7 @@ import { stateDir } from '../env.ts';
 import { writeFileAtomic } from '../fs-atomic.ts';
 import { ensurePrivateFolder } from '../fs-private.ts';
 import { CODEX_FLAGS, codexExecArgs } from './codex-args.ts';
+import { checkWorkdir, codexChildEnv, codexMailboxProblem } from './codex-guard.ts';
 import type { SupervisorJob } from './codex-supervisor.ts';
 import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
 
@@ -28,6 +29,13 @@ export function supervisorScriptPath(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Why the working folder or the mailbox is refused for a Codex session, or undefined. */
+async function placeProblem(ctx: AdapterContext): Promise<string | undefined> {
+  const workdir = await checkWorkdir(ctx.env, ctx.runner);
+  if (workdir !== undefined) return workdir;
+  return ctx.mailbox === undefined ? undefined : codexMailboxProblem(ctx.mailbox, ctx.env);
 }
 
 /**
@@ -68,13 +76,15 @@ export const codexAdapter: Adapter = {
   displayName: 'Codex CLI',
   flags: CODEX_FLAGS,
 
+  mailboxProblem: codexMailboxProblem,
+
   /** Starts one session on its own, for respawn. */
   async launch(name, kickoff, flagArgs, ctx) {
     try {
-      const { pid } = await ctx.runner.spawnDetached(ctx.binaryPath, codexExecArgs(flagArgs, kickoff, ctx.mailbox), {
-        env: ctx.env.vars,
-        cwd: ctx.env.cwd,
-      });
+      const args = codexExecArgs(flagArgs, kickoff, ctx.mailbox);
+      const refused = await placeProblem(ctx);
+      if (refused !== undefined) return { ok: false, message: refused };
+      const { pid } = await ctx.runner.spawnDetached(ctx.binaryPath, args, { env: codexChildEnv(ctx.env.vars), cwd: ctx.env.cwd });
       return { ok: true, entry: { name, pid, session_id: null } };
     } catch (error) {
       return { ok: false, message: errorMessage(error) };
@@ -91,7 +101,9 @@ export const codexAdapter: Adapter = {
         return { ok: false, message: `${item.name}: ${errorMessage(error)}` };
       }
     }
-    const job: SupervisorJob = { binary: ctx.binaryPath, cwd: ctx.env.cwd, teamPath, sessions };
+    const refused = await placeProblem(ctx);
+    if (refused !== undefined) return { ok: false, message: refused };
+    const job: SupervisorJob = { binary: ctx.binaryPath, cwd: ctx.env.cwd, home: ctx.env.home, teamPath, sessions };
     const jobPath = join(stateDir(ctx.env), 'codex-supervisor.json');
     try {
       ensurePrivateFolder(stateDir(ctx.env));

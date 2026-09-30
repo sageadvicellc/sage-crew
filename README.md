@@ -112,6 +112,8 @@ trellis-crew up --harness claude-code --accept-inbound
 
 - `--harness <name>` is required. The names are `codex` and
   `claude-code`. Any other name exits 2.
+- On Codex CLI, run `up` at the top of a git worktree. See "The Codex
+  CLI sandbox" below.
 - The install step runs as `install --harness <name> --non-interactive`.
   So it asks no question.
 - `up` takes the flags that `start` takes: `--workers N`,
@@ -201,9 +203,45 @@ before it starts that session. If the arguments are wrong, it refuses
 that session and writes the reason to `codex-supervisor.log` in the
 state folder.
 
+The sandbox lets each session write its working folder. So the CLI
+starts Codex CLI sessions only at the top of a git worktree. The CLI
+runs `git rev-parse --show-toplevel` in the current folder. The answer
+must be that same folder, after both paths resolve through any links.
+The CLI also refuses your home folder and `/`. The folder is checked
+three times:
+
+- before `up` installs anything
+- before the CLI writes the supervisor job
+- in the supervisor, before it starts any session
+
+On Codex CLI, the mailbox folder must be inside the state folder,
+`~/.trellis-crew`. The CLI resolves the folder through any links first.
+Then it refuses each of these folders:
+
+- `/`
+- your home folder
+- the state folder itself
+- a folder that holds the state folder
+- a folder that holds the working folder
+- a folder outside the state folder
+
+`up` checks this before the install. `start` checks it before it
+creates the folder. On the other harnesses, the mailbox rules stay as
+they were.
+
+Each Codex CLI session gets only these environment variables:
+
+- `PATH`, `HOME`, `USER`, `LOGNAME`, and `SHELL`
+- `TMPDIR`, `TMP`, and `TEMP`
+- `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, and `TZ`
+- `SSL_CERT_FILE` and `SSL_CERT_DIR`
+- `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY`
+- `OPENAI_API_KEY` and `CODEX_HOME`
+
+No other variable passes, and no other `CODEX_` variable passes.
+
 This is not a full boundary. Your own `~/.codex/config.toml` can still
-change other keys. Each session gets the environment of the process
-that started it.
+change other keys.
 
 ### Exit codes
 

@@ -190,6 +190,11 @@ export function planLaunch(config: RolesConfig, deps: CliDeps): { ok: true; plan
   }
   const plan: LaunchPlan = { harness, adapter, binaryPath, transport };
   if (transport === 'file-mailbox') {
+    const problem = adapter.mailboxProblem?.(mailboxPath(config, deps.env), deps.env);
+    if (problem !== undefined) {
+      deps.err(problem);
+      return { ok: false, code: EXIT_USAGE };
+    }
     const folder = ensureMailboxFolder(mailboxPath(config, deps.env));
     if (!folder.ok) {
       deps.err(folder.message);

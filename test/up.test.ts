@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupervisorJob } from '../src/adapters/codex-supervisor.ts';
@@ -7,10 +7,11 @@ import { main, type CliDeps } from '../src/cli.ts';
 import { upInstallOptions } from '../src/commands/up.ts';
 import { readInstallRecord, writeInstallRecord } from '../src/store/install-yml.ts';
 import { readTeam, teamJsonPath } from '../src/store/team-json.ts';
-import { makeTestEnv } from './helpers/env.ts';
+import { makeFixtureHome, makeTestEnv } from './helpers/env.ts';
 import { capture, type Capture } from './helpers/io.ts';
 import { fixtureBin, repoRoot } from './helpers/paths.ts';
-import { recordingRunner, type RecordingRunner } from './helpers/recording-runner.ts';
+import { makeFixtureRepo } from './helpers/git-repo.ts';
+import { isGitCall, recordingRunner, type RecordingRunner } from './helpers/recording-runner.ts';
 import { SMALL_TEAM } from './helpers/roles.ts';
 import { writeRoles } from './helpers/team.ts';
 import type { Env } from '../src/env.ts';
@@ -25,9 +26,13 @@ interface Rig {
   settings: string;
 }
 
-/** A fresh fixture home with no install.yml, a Claude Code folder, and a recording runner that runs nothing. */
+/**
+ * A fresh fixture home with no install.yml, a Claude Code folder, and a
+ * recording runner that runs nothing but the git check. The current folder
+ * is the top of a temp git repository, where Codex sessions may start.
+ */
 function rig(options: { tty?: boolean } = {}): Rig {
-  const env = makeTestEnv({ stdinIsTTY: options.tty === true });
+  const env = makeTestEnv({ stdinIsTTY: options.tty === true, cwd: makeFixtureRepo().root });
   mkdirSync(join(env.home, '.claude'));
   const settings = join(env.home, '.claude', 'settings.json');
   writeFileSync(settings, '{"theme": "dark"}\n');
@@ -218,7 +223,11 @@ describe('up --harness codex', () => {
     expect(readInstallRecord(t.env)).toMatchObject({ ok: true, record: { harness: 'codex', transport: 'file-mailbox' } });
     expect(readdirSync(join(t.env.home, '.agents', 'skills')).sort()).toEqual(readdirSync(join(repoRoot, 'skills')).sort());
     // No probe runs, because --harness names the harness, and no codex process runs in a test.
-    expect(t.runner.calls.filter((c) => c.kind === 'run')).toEqual([]);
+    // The only runs are the working-folder checks: once before step 1, and once before the supervisor starts.
+    expect(t.runner.calls.filter((c) => c.kind === 'run').map((c) => c.args)).toEqual([
+      ['rev-parse', '--show-toplevel'],
+      ['rev-parse', '--show-toplevel'],
+    ]);
     const job = supervisorJob(t);
     expect(job.binary).toBe(join(fixtureBin, 'codex'));
     expect(job.sessions).toHaveLength(6);
@@ -271,23 +280,27 @@ describe('up --harness codex', () => {
 
   it('stops at a failed install with its message, names the step, and starts nothing', async () => {
     const t = rig();
-    const bare = { ...t.deps, env: { ...t.env, path: join(t.env.home, 'no-bin') } };
+    // A PATH with git, for the working-folder check, and no codex.
+    const gitOnly = join(t.env.home, 'git-only');
+    mkdirSync(gitOnly);
+    copyFileSync(join(fixtureBin, 'git'), join(gitOnly, 'git'));
+    const bare = { ...t.deps, env: { ...t.env, path: gitOnly } };
     expect(await main(['up', '--harness', 'codex'], bare)).toBe(1);
     expect(t.err.text()).toContain('Codex CLI is not on PATH, so the plugin cannot be installed.');
     expect(t.err.text()).toContain('trellis-crew up stopped at step 1 of 2, install, with exit code 1. Nothing was started.');
     expect(t.out.text()).not.toContain('Step 2 of 2');
-    expect(t.runner.calls).toEqual([]);
+    expect(t.runner.calls.filter((c) => !isGitCall(c))).toEqual([]);
     expect(existsSync(teamJsonPath(t.env))).toBe(false);
   });
 
   it('names the start step when start fails after the install', async () => {
     const t = rig();
     expect(await main(['up', '--harness', 'codex'], t.deps)).toBe(0);
-    const before = t.runner.calls.length;
+    const before = t.runner.calls.filter((c) => !isGitCall(c)).length;
     expect(await main(['up', '--harness', 'codex'], t.deps)).toBe(1);
     expect(t.err.text()).toMatch(/A team record already exists/);
     expect(t.err.text()).toContain('trellis-crew up stopped at step 2 of 2, start, with exit code 1.');
-    expect(t.runner.calls.length).toBe(before);
+    expect(t.runner.calls.filter((c) => !isGitCall(c)).length).toBe(before);
   });
 
   it('a roles file found in this folder needs --yes, because up asks no question', async () => {
@@ -297,7 +310,7 @@ describe('up --harness codex', () => {
     expect(t.ask).not.toHaveBeenCalled();
     expect(t.err.text()).toContain('trellis-crew up asks no question about a roles file. Read it, then run up again with --yes.');
     expect(t.err.text()).toContain('trellis-crew up stopped at step 1 of 2, install, with exit code 2. Nothing was started.');
-    expect(t.runner.calls).toEqual([]);
+    expect(t.runner.calls.filter((c) => !isGitCall(c))).toEqual([]);
 
     const yes = rig({ tty: true });
     writeFileSync(join(yes.env.cwd, 'sagespec.yml'), SMALL_TEAM);
@@ -330,6 +343,50 @@ describe('up --harness codex', () => {
     expectNothingInstalled(broken);
   });
 
+  it('refuses the home folder, /, a folder that is not a repo, and a repo subfolder before the install', async () => {
+    const cases: [string, (t: Rig) => string, RegExp][] = [
+      ['home', (t) => t.env.home, /: it is your home folder\./],
+      ['root', () => '/', /\/: it is the root folder\./],
+      ['plain', () => makeFixtureHome(), /: it is not in a git worktree \(/],
+      [
+        'sub',
+        (t) => {
+          mkdirSync(join(t.env.cwd, 'sub'));
+          return join(t.env.cwd, 'sub');
+        },
+        /: it is not the top of a git worktree\. The top is /,
+      ],
+    ];
+    for (const [, folder, reason] of cases) {
+      const t = rig();
+      const deps = { ...t.deps, env: { ...t.env, cwd: folder(t) } };
+      expect(await main(['up', '--harness', 'codex', '--yes'], deps)).toBe(2);
+      expect(t.err.text()).toContain('Codex CLI sessions can write their working folder, so trellis-crew starts them only at the top of a git worktree.');
+      expect(t.err.text()).toMatch(reason);
+      expect(t.err.text()).toContain(STOPPED_BEFORE_INSTALL);
+      expectNothingInstalled(t);
+    }
+  });
+
+  it('refuses a roles file whose mailbox is outside the state folder, before the install', async () => {
+    const t = rig();
+    writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('operator: you', 'operator: you\nmailbox: ~/team-mail'));
+    expect(await main(['up', '--harness', 'codex', '--roles', 'team.yml'], t.deps)).toBe(2);
+    expect(t.err.text()).toMatch(/The file mailbox on Codex CLI must be a folder inside .*\.trellis-crew, because every session can write it\. .*team-mail: it is outside the state folder\./);
+    expect(t.err.text()).toContain(STOPPED_BEFORE_INSTALL);
+    expectNothingInstalled(t);
+    expect(existsSync(join(t.env.home, 'team-mail'))).toBe(false);
+  });
+
+  it('on Claude Code, up keeps its working-folder and mailbox behavior, because Claude Code sessions get no Codex sandbox', async () => {
+    const t = rig();
+    const deps = { ...t.deps, env: { ...t.env, cwd: t.env.home } };
+    writeRoles(deps.env, 'team.yml', SMALL_TEAM.replace('operator: you', 'operator: you\nmailbox: ~/team-mail').replace('transport: auto', 'transport: file-mailbox'));
+    expect(await main(['up', '--harness', 'claude-code', '--skip-inbound', '--roles', 'team.yml'], deps)).toBe(0);
+    expect(t.runner.calls.filter(isGitCall)).toEqual([]);
+    expect(existsSync(join(t.env.home, 'team-mail'))).toBe(true);
+  });
+
   it('applies the harness bounds before the install, so a --roles file out of bounds installs nothing', async () => {
     const t = rig();
     writeRoles(t.env, 'team.yml', SMALL_TEAM.replace('autocompact: 400k', 'autocompact: 99k'));
@@ -342,9 +399,9 @@ describe('up --harness codex', () => {
 const STOPPED_BEFORE_INSTALL = 'trellis-crew up stopped at step 1 of 2, install, with exit code 2. Nothing was installed or started.';
 const STOPPED_AFTER_INSTALL = 'trellis-crew up stopped at step 2 of 2, start, with exit code 2. Nothing was started. The install step already ran.';
 
-/** No install side effect: no install.yml, no skills, no plugin command, no team record. */
+/** No install side effect: no install.yml, no skills, no plugin command, no team record. Only the git check may run. */
 function expectNothingInstalled(t: Rig): void {
-  expect(t.runner.calls).toEqual([]);
+  expect(t.runner.calls.filter((c) => !isGitCall(c))).toEqual([]);
   expect(existsSync(join(t.env.home, '.trellis-crew', 'install.yml'))).toBe(false);
   expect(existsSync(join(t.env.home, '.agents'))).toBe(false);
   expect(existsSync(teamJsonPath(t.env))).toBe(false);

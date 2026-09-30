@@ -5,11 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { processStartTime, startedOf } from '../runner.ts';
 import { readTeamFile, writeTeamFile } from '../store/team-json.ts';
 import { execArgsProblem } from './codex-args.ts';
+import { checkWorkdirSync, codexChildEnv } from './codex-guard.ts';
 
 /** What the CLI hands the supervisor: the binary, the folder, the team record, and each session's arguments. */
 export interface SupervisorJob {
   binary: string;
   cwd: string;
+  /** The home folder, which is never a working folder. */
+  home: string;
   teamPath: string;
   sessions: { name: string; args: string[] }[];
   /** Never set. The supervisor reads its own pid, so the job file cannot name the wrong one. */
@@ -85,6 +88,12 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
 
   const warn = options.warn ?? defaultWarn(job.teamPath);
   const startAll = (): void => {
+    // Every child can write the working folder, so it is checked again here, before any child starts.
+    const workdir = checkWorkdirSync(job.cwd, job.home);
+    if (workdir !== undefined) {
+      warn(`trellis-crew supervisor: refused to start any session: ${workdir}`);
+      return finish();
+    }
     for (const session of job.sessions) {
       if (stopping) break;
       // Defense in depth: the CLI built these arguments, and the supervisor checks them again before it runs any.
@@ -93,7 +102,7 @@ export function runSupervisor(job: SupervisorJob, options: SupervisorOptions): S
         warn(`trellis-crew supervisor: ${session.name}: refused, so it was not started: ${problem}`);
         continue;
       }
-      const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: process.env });
+      const child = spawn(job.binary, session.args, { cwd: job.cwd, stdio: 'ignore', env: codexChildEnv(process.env) });
       child.once('error', () => {
         children.delete(session.name);
         settleWhenEmpty();

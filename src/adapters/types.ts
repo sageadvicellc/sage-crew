@@ -45,6 +45,12 @@ export interface Adapter {
   updatePlugin?(ctx: AdapterContext): Promise<PluginOutcome>;
   /** The user settings file whose inbound setting install sets to accept, after a dated backup. */
   inboundTarget?(env: Env): InboundTarget;
+  /**
+   * Why a file mailbox folder is refused on this harness, or undefined.
+   * Checked before the folder is created. Unset: any folder the roles file
+   * allows.
+   */
+  mailboxProblem?(mailbox: string, env: Env): string | undefined;
   /** Extra status lines from the harness's own session list. */
   statusLines?(ctx: AdapterContext): Promise<string[]>;
   /**

@@ -1,6 +1,9 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { checkWorkdir } from '../adapters/codex-guard.ts';
+import { adapterFor } from '../adapters/index.ts';
 import type { Command, UpHarness } from '../args.ts';
+import { mailboxPath } from '../mailbox/folder.ts';
 import { EXIT_OK, EXIT_USAGE, type CliDeps } from '../deps.ts';
 import { HARNESSES } from '../detect/probe.ts';
 import { printable } from '../printable.ts';
@@ -115,6 +118,14 @@ function checkTeam(options: UpOptions, deps: CliDeps): { ok: true; sha256: strin
     deps.err(mismatch);
     return { ok: false };
   }
+  // The same mailbox rule that start applies on this harness, before the install creates anything.
+  if (loaded.config.transport !== 'a2a') {
+    const problem = adapterFor(options.harness, deps.adapters)?.mailboxProblem?.(mailboxPath(loaded.config, deps.env), deps.env);
+    if (problem !== undefined) {
+      deps.err(problem);
+      return { ok: false };
+    }
+  }
   // The loader hashes the text it validated, which for --roles is the text read once.
   return { ok: true, sha256: loaded.sha256 };
 }
@@ -129,6 +140,14 @@ function displayName(harness: UpHarness): string {
  * fails, names that step, and exits with that step's code.
  */
 export async function runUp(options: UpOptions, deps: CliDeps): Promise<number> {
+  // Codex sessions can write their working folder, so it is checked before anything else.
+  if (options.harness === 'codex') {
+    const workdir = await checkWorkdir(deps.env, deps.runner);
+    if (workdir !== undefined) {
+      deps.err(workdir);
+      return stopped(deps, STEP_INSTALL, EXIT_USAGE, NOTHING_YET);
+    }
+  }
   const checked = checkTeam(options, deps);
   if (!checked.ok) return stopped(deps, STEP_INSTALL, EXIT_USAGE, NOTHING_YET);
 
