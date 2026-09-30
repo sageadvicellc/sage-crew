@@ -1,4 +1,9 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { codexExecArgs } from '../src/adapters/codex-args.ts';
+import { runSupervisor, type SupervisorJob } from '../src/adapters/codex-supervisor.ts';
+import { supervisorScriptPath } from '../src/adapters/codex.ts';
+import { readTeamFile, writeTeamFile } from '../src/store/team-json.ts';
 import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { codexAdapter } from '../src/adapters/codex.ts';
@@ -233,11 +238,113 @@ describe('every other way Codex is chosen or started, flag off and on', () => {
 
   it('stop and status still work with the flag off, so a running team can always be ended', async () => {
     const t = withFlag(installedOn('codex', 'file-mailbox'), OFF);
-    writeTeam(t.env, { version: 1, harness: 'codex', transport: 'file-mailbox', sessions: [{ name: 'main', pid: null, session_id: null }] });
+    writeTeam(t.env, {
+      version: 1,
+      harness: 'codex',
+      transport: 'file-mailbox',
+      supervisor_pid: 4100,
+      supervisor_started: 'start-supervisor',
+      sessions: [
+        { name: 'main', pid: 4101, session_id: null, started: 'start-main' },
+        { name: 'worker-1', pid: 4102, session_id: null, started: 'start-worker' },
+      ],
+    });
+    for (const [pid, started] of [[4100, 'start-supervisor'], [4101, 'start-main'], [4102, 'start-worker']] as const) {
+      t.runner.living.add(pid);
+      t.runner.starts.set(pid, started);
+    }
+    t.deps.env = t.env;
     expect(await main(['status'], t.deps)).toBe(0);
-    await main(['stop'], t.deps);
+    expect(t.out.text()).toContain('Team on Codex CLI');
+    expect(t.out.text()).toMatch(/supervisor\s+pid 4100\s+running/);
+    expect(t.out.text()).toMatch(/main\s+pid 4101\s+session -\s+running/);
+    expect(t.out.text()).toMatch(/worker-1\s+pid 4102\s+session -\s+running/);
+
+    expect(await main(['stop'], t.deps)).toBe(0);
+    // Stop signals only the recorded processes, through the recording runner, and removes the record.
+    expect(t.runner.calls.filter((c) => c.kind === 'kill').map((c) => Number(c.command))).toEqual([4100, 4101, 4102]);
+    expect(t.runner.calls.filter((c) => c.kind !== 'kill')).toEqual([]);
+    expect(existsSync(teamJsonPath(t.env))).toBe(false);
     expect(t.err.text()).not.toContain(MESSAGE);
     expect(t.out.text()).not.toContain(MESSAGE);
+  });
+});
+
+describe('the Codex supervisor checks the flag itself', () => {
+  /** A job whose binary would leave a marker file if the supervisor ever started it. */
+  function markerJob(cwd: string, home: string) {
+    const dir = makeFixtureHome();
+    const marker = join(dir, 'started');
+    const bin = join(dir, 'codex');
+    writeFileSync(bin, `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(bin, 0o755);
+    const teamPath = join(dir, 'team.json');
+    writeTeamFile(teamPath, { version: 1, harness: 'codex', supervisor_pid: process.pid, sessions: [{ name: 'main', pid: null, session_id: null }] });
+    const job: SupervisorJob = { binary: bin, cwd, home, teamPath, sessions: [{ name: 'main', args: codexExecArgs([], 'k', dir) }] };
+    return { job, marker, teamPath, dir };
+  }
+
+  it('with the flag off, refuses, logs the reason, and starts no child', async () => {
+    for (const value of [undefined, '', '0', 'true']) {
+      const { job, marker, teamPath } = markerJob(makeFixtureRepo().root, makeFixtureHome());
+      const warnings: string[] = [];
+      const vars: Record<string, string | undefined> = { [VARIABLE]: value };
+      const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: (line) => warnings.push(line), vars });
+      await handle.done;
+      expect(handle.refused).toBe(true);
+      expect(warnings).toEqual([`trellis-crew supervisor: refused to start any session: ${MESSAGE}`]);
+      expect(existsSync(marker)).toBe(false);
+      const team = readTeamFile(teamPath);
+      expect(team.ok && team.record?.sessions[0]?.pid).toBeNull();
+    }
+  });
+
+  it('with the flag off and no warn option, writes the reason to codex-supervisor.log beside the team record', async () => {
+    const { job, dir } = markerJob(makeFixtureRepo().root, makeFixtureHome());
+    const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10, vars: {} });
+    await handle.done;
+    expect(readFileSync(join(dir, 'codex-supervisor.log'), 'utf8')).toContain(`refused to start any session: ${MESSAGE}`);
+  });
+
+  it('with the flag on, goes on to its existing checks unchanged', async () => {
+    // The working folder is the home folder, so the existing check refuses it, not the flag check.
+    const home = makeFixtureHome();
+    const { job, marker } = markerJob(home, home);
+    const warnings: string[] = [];
+    const handle = runSupervisor(job, { ownPid: process.pid, pollMs: 10, warn: (line) => warnings.push(line), vars: { [VARIABLE]: '1' } });
+    await handle.done;
+    expect(handle.refused).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('it is your home folder');
+    expect(warnings[0]).not.toContain(MESSAGE);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('run as its own process on a job file with the flag off, exits 2 and starts nothing', () => {
+    const { job, marker, dir } = markerJob(makeFixtureRepo().root, makeFixtureHome());
+    const jobPath = join(dir, 'job.json');
+    writeFileSync(jobPath, JSON.stringify(job));
+    const ran = spawnSync(process.execPath, [supervisorScriptPath(), jobPath], {
+      env: { PATH: process.env.PATH ?? '', HOME: dir },
+      encoding: 'utf8',
+    });
+    expect(ran.status).toBe(2);
+    expect(ran.stderr).toContain(MESSAGE);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('start passes the variable to the supervisor process in the env it spawns with', async () => {
+    const t = withFlag(installedOn('codex', 'file-mailbox'), ON);
+    expect(await main(['start'], t.deps)).toBe(0);
+    const spawn = t.runner.calls.find((c) => c.kind === 'detached');
+    expect(spawn?.env?.[VARIABLE]).toBe('1');
+  });
+
+  it('up passes the variable to the supervisor process too', async () => {
+    const t = withFlag(installedOn('codex', 'file-mailbox'), ON);
+    expect(await main(['up', '--harness', 'codex', '--yes'], t.deps)).toBe(0);
+    const spawn = t.runner.calls.find((c) => c.kind === 'detached');
+    expect(spawn?.env?.[VARIABLE]).toBe('1');
   });
 });
 
