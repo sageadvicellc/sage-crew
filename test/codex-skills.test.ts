@@ -1256,6 +1256,44 @@ describe('a folder swapped for a link during the export', () => {
   });
 });
 
+describe('.git/info swapped for a link during the export', () => {
+  it('after the survey and before the lock, the run refuses with a named step and writes nothing in either place', async () => {
+    const p = project();
+    const info = dirname(p.exclude);
+    const realInfo = join(makeFixtureHome(), 'info-moved');
+    const outside = makeFixtureHome();
+    writeFileSync(join(outside, 'exclude'), '# outside\n');
+    const before = readFileSync(p.exclude, 'utf8');
+    const hooked: ExportFs = {
+      ...nodeExportFs,
+      mkdir: (path, m) => {
+        nodeExportFs.mkdir(path, m);
+        if (path === join(p.top, '.agents')) {
+          // A racer moves .git/info away and links it to a folder outside the repo.
+          renameSync(info, realInfo);
+          symlinkSync(outside, info);
+        }
+      },
+    };
+    const result = await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha']), fs: hooked });
+    expect(!result.ok && result.message).toMatch(/the skill export stopped: .*\.git\/info is a symbolic link/);
+    expect(snapshot(outside)).toEqual({ exclude: '# outside\n' });
+    expect(readFileSync(join(realInfo, 'exclude'), 'utf8')).toBe(before);
+    expect(existsSync(join(realInfo, 'exclude.trellis-crew.lock'))).toBe(false);
+    expect(existsSync(join(p.target, 'alpha'))).toBe(false);
+  });
+
+  it('a normal run passes with the .git/info pin, and a missing .git/info is made and pinned', async () => {
+    const p = project();
+    expect(await exportSkills(p.ctx(), { root: standInPackage(TWO, ['alpha']) })).toEqual({ ok: true });
+    expect(readFileSync(p.exclude, 'utf8')).toContain('/.agents/skills/alpha/');
+    const q = project();
+    rmSync(dirname(q.exclude), { recursive: true });
+    expect(await exportSkills(q.ctx(), { root: standInPackage(TWO, ['alpha']) })).toEqual({ ok: true });
+    expect(readFileSync(q.exclude, 'utf8')).toBe(block('/.agents/skills/alpha/'));
+  });
+});
+
 describe('git variables in the parent environment', () => {
   it('are removed, so the top check, the tracked check, and the exclude path see the real repository', async () => {
     const other = makeFixtureRepo();

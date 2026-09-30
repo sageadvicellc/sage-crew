@@ -724,6 +724,8 @@ interface ExcludeFile {
   text: string;
   /** The file's mode, or undefined when the file is missing. */
   mode: number | undefined;
+  /** The realpath of the file's folder, `.git/info`, under the git common folder. The export pins that folder to it. */
+  infoReal: string;
 }
 
 /**
@@ -745,9 +747,10 @@ async function readExclude(top: string, git: Git): Promise<{ ok: true; file: Exc
   const stat = lstatOrUndefined(path);
   if (stat?.isSymbolicLink() === true) return { ok: false, message: `the git exclude file ${path} is a symbolic link, which is not followed` };
   if (stat !== undefined && !stat.isFile()) return { ok: false, message: `the git exclude file ${path} is not a file` };
-  const real = stat !== undefined ? realpathSync(path) : lstatOrUndefined(info) !== undefined ? join(realpathSync(info), 'exclude') : join(realpathSync(dirname(info)), 'info', 'exclude');
-  if (!isUnder(real, commonDir)) return { ok: false, message: `the git exclude file ${path} is not under the git folder ${commonDir}` };
-  return { ok: true, file: { path, text: stat === undefined ? '' : readFileSync(path, 'utf8'), mode: stat === undefined ? undefined : stat.mode & 0o777 } };
+  const infoReal = lstatOrUndefined(info) !== undefined ? realpathSync(info) : join(realpathSync(dirname(info)), basename(info));
+  const real = stat !== undefined ? realpathSync(path) : join(infoReal, basename(path));
+  if (!isUnder(real, commonDir) || !isUnder(infoReal, commonDir)) return { ok: false, message: `the git exclude file ${path} is not under the git folder ${commonDir}` };
+  return { ok: true, file: { path, text: stat === undefined ? '' : readFileSync(path, 'utf8'), mode: stat === undefined ? undefined : stat.mode & 0o777, infoReal } };
 }
 
 /* ---------- The survey: everything read before anything is written ---------- */
@@ -895,8 +898,12 @@ export async function exportSkills(ctx: ExportContext, options: ExportOptions = 
     const agentsPin = pinFolder(agents, join(realTop, '.agents'));
     if (lstatOrUndefined(skillsDir) === undefined) pinnedFs(fsx, [agentsPin]).mkdir(skillsDir);
     const skillsPin = pinFolder(skillsDir, projectSkillsDir(realTop));
-    gfs = pinnedFs(fsx, [agentsPin, skillsPin]);
-    if (lstatOrUndefined(dirname(exclude.path)) === undefined) gfs.mkdir(dirname(exclude.path));
+    // Pin `.git/info` too, against its realpath under the git common folder,
+    // so the lock and the exclude write cannot follow a link swapped in later.
+    const info = dirname(exclude.path);
+    if (lstatOrUndefined(info) === undefined) pinnedFs(fsx, [agentsPin, skillsPin]).mkdir(info);
+    const infoPin = pinFolder(info, exclude.infoReal);
+    gfs = pinnedFs(fsx, [agentsPin, skillsPin, infoPin]);
 
     // The exclude lines go in before the first copy, so no copy shows in git status.
     writeExclude();

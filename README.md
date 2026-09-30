@@ -155,7 +155,9 @@ Under the workspace-write sandbox, "`<writable_root>/.agents` is
 protected as read-only when it exists as a directory". The Codex
 approvals and security page says so
 (https://learn.chatgpt.com/docs/agent-approvals-security, read
-2026-09-30). So a Codex session cannot edit the copies.
+2026-09-30). So a Codex session cannot edit the copies. If someone
+deletes `.agents` while Codex sessions run, a session can make it
+again, so run the export again before you start new sessions.
 
 The export keeps git clean, and it changes no tracked file:
 
