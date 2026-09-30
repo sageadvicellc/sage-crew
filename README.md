@@ -258,4 +258,7 @@ range is `origin/main..HEAD` when `origin/main` exists.
 on once per clone with `git config core.hooksPath .githooks`. CI runs the
 same checks on every pull request and every push to main, in
 `.github/workflows/sanitize.yml`. That workflow runs the base branch's
-sanitizer and reads the branch only as data.
+sanitizer and reads the branch only as data. A pull request from a fork
+never receives the deny-list. It runs the other four checks and then
+fails, because the deny-list scan runs only after a maintainer moves the
+branch into this repository.

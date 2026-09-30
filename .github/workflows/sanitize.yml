@@ -46,7 +46,10 @@ jobs:
       # The secret reaches this step as an environment variable and goes
       # straight to a file, so it never appears in the log. When the secret
       # is missing, no file is written and the sanitize step fails closed.
+      # A pull request from a fork never gets the secret: its public log
+      # would name the deny-list line of each guessed term that matched.
       - name: Write the deny-list
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           SANITIZE_DENYLIST_CONTENT: ${{ secrets.SANITIZE_DENYLIST_CONTENT }}
         run: |
@@ -58,6 +61,7 @@ jobs:
       # package. The working folder is the branch, so git reads it as data.
       # No npm script, hook, or file from the branch runs.
       - name: Sanitize the branch
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         working-directory: head
         env:
           SANITIZE_REQUIRE_DENYLIST: "1"
@@ -65,3 +69,16 @@ jobs:
           SANITIZE_ALLOWLIST: ${{ github.workspace }}/base/.sanitize-allow
           SANITIZE_RANGE: ${{ github.event_name == 'pull_request_target' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
         run: node "$GITHUB_WORKSPACE/base/src/sanitize/run.ts"
+
+      # A fork gets the other four checks with no deny-list, and then the
+      # job fails, because the deny-list scan has not run.
+      - name: Sanitize a fork without the deny-list
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository
+        working-directory: head
+        env:
+          SANITIZE_ALLOWLIST: ${{ github.workspace }}/base/.sanitize-allow
+          SANITIZE_RANGE: ${{ format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) }}
+        run: |
+          node "$GITHUB_WORKSPACE/base/src/sanitize/run.ts" || true
+          echo "the deny-list scan runs after a maintainer moves the branch into this repository"
+          exit 1

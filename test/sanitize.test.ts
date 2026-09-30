@@ -817,6 +817,24 @@ describe('sanitize run', () => {
     expect(env['SANITIZE_REQUIRE_DENYLIST']).toBe('1');
     expect(env['SANITIZE_ALLOWLIST']).toMatch(/\/base\/\.sanitize-allow$/);
     expect(env['SANITIZE_RANGE']).toContain("github.event_name == 'pull_request_target'");
+
+    // A pull request from a fork never receives the deny-list, so the
+    // public log cannot confirm guessed names. The write step and the full
+    // scan run only for a push or a branch in this repository.
+    const sameRepo = "github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository";
+    const write = steps.find((s) => s['name'] === 'Write the deny-list');
+    expect(write?.['if']).toBe(sameRepo);
+    expect(run?.['if']).toBe(sameRepo);
+    const fork = steps.find((s) => s['name'] === 'Sanitize a fork without the deny-list');
+    expect(fork?.['if']).toBe(
+      "github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository",
+    );
+    expect(JSON.stringify(fork)).not.toContain('secrets.');
+    expect(JSON.stringify(fork)).not.toContain('SANITIZE_DENYLIST');
+    expect(String(fork?.['run'])).toContain('the deny-list scan runs after a maintainer moves the branch into this repository');
+    expect(String(fork?.['run'])).toMatch(/exit 1\s*$/);
+    // Only the write step names the secret.
+    expect(steps.filter((s) => JSON.stringify(s).includes('secrets.'))).toEqual([write]);
   });
 
   it('a tracked link is scanned as its target text and never followed', async () => {
@@ -868,6 +886,43 @@ describe('sanitize run', () => {
     } finally {
       rmSync(outsideDir, { recursive: true });
     }
+  });
+
+  it('a branch .mailmap cannot hide a deny-listed author', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    // The mailmap maps the deny-listed author name to a clean one.
+    repo.write('.mailmap', `Clean Name <fixture@example.invalid> ${TERM} <fixture@example.invalid>\n`);
+    repo.git('add', '-A');
+    repo.git('-c', `user.name=${TERM}`, 'commit', '-q', '-m', 'chore: start');
+    const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/deny-list: commit [0-9a-f]{7} author name:/);
+  });
+
+  it('every git call the sanitizer makes turns the mailmap off', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('clean.md', 'nothing\n');
+    repo.commit('chore: start');
+    const real = createRunner();
+    const gitCalls: string[][] = [];
+    const runner: Runner = {
+      ...real,
+      run: (command, args, options) => {
+        if (command === 'git' && !args.includes('cat-file') && args[0] !== 'rev-parse') gitCalls.push([...args]);
+        return real.run(command, args, options);
+      },
+    };
+    await runSanitize({
+      cwd: repo.root,
+      runner,
+      vars: { PATH: process.env.PATH, SANITIZE_DENYLIST: denyFile() },
+      range: 'HEAD',
+      out: () => {},
+      err: () => {},
+    });
+    expect(gitCalls.length).toBeGreaterThan(0);
+    for (const args of gitCalls) expect(args.slice(0, 4), args.join(' ')).toEqual(['-c', 'core.quotePath=false', '-c', 'log.mailmap=false']);
   });
 
   it('a printed line never holds a workflow command marker', () => {

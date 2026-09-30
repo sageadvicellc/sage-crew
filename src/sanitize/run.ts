@@ -56,7 +56,9 @@ interface Git {
 
 function makeGit(runner: Runner, cwd: string, vars: SanitizeOptions['vars']): Git {
   return async (args) => {
-    const result = await runner.run('git', ['-c', 'core.quotePath=false', ...args], { cwd, env: vars });
+    // log.mailmap=false keeps author and committer fields raw, so a
+    // branch's own .mailmap cannot rename an author before the scan.
+    const result = await runner.run('git', ['-c', 'core.quotePath=false', '-c', 'log.mailmap=false', ...args], { cwd, env: vars });
     return { ok: result.code === 0, stdout: result.stdout };
   };
 }
