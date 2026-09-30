@@ -12,6 +12,14 @@ import type { Adapter, AdapterContext, PluginOutcome } from './types.ts';
  */
 export const CLAUDE_MARKETPLACE_REPO = 'sageadvicellc/sage-freebies';
 export const CLAUDE_MARKETPLACE_NAME = CLAUDE_MARKETPLACE_REPO.split('/')[1] as string;
+/**
+ * The reviewed release tag the marketplace is pinned to. The same page
+ * documents `<owner>/<repo>#<ref>`, where the ref is a branch or a tag. A
+ * new marketplace release is reviewed, tagged, and then pinned here.
+ */
+export const CLAUDE_MARKETPLACE_REF = 'v0.1.0';
+/** The pinned source that `claude plugin marketplace add` receives. */
+export const CLAUDE_MARKETPLACE_SOURCE = `${CLAUDE_MARKETPLACE_REPO}#${CLAUDE_MARKETPLACE_REF}`;
 /** The plugin as Claude Code names it: `<plugin>@<marketplace name>`. */
 export const CLAUDE_PLUGIN_ID = `trellis-crew@${CLAUDE_MARKETPLACE_NAME}`;
 
@@ -76,7 +84,7 @@ export const claudeCodeAdapter: Adapter = {
   async installPlugin(ctx) {
     // Gap: the docs do not say whether adding a marketplace that is already
     // added succeeds, so a failure here stops the install and prints why.
-    const added = await pluginCommand(ctx, ['marketplace', 'add', CLAUDE_MARKETPLACE_REPO]);
+    const added = await pluginCommand(ctx, ['marketplace', 'add', CLAUDE_MARKETPLACE_SOURCE]);
     if (!added.ok) return added;
     return pluginCommand(ctx, ['install', CLAUDE_PLUGIN_ID]);
   },

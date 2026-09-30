@@ -188,7 +188,7 @@ This repository is public. The sanitizer keeps private text out of it.
 Run it with `npm run sanitize`. It scans every tracked file and the
 staged diff. For each commit in a range, it scans the message, the added
 lines, and the author and committer names and emails. So a leak that one
-commit adds and a later commit removes still fails. It fails on four
+commit adds and a later commit removes still fails. It fails on five
 classes of text.
 
 1. Secrets: an API key or token prefix followed by a full key, a
@@ -199,6 +199,8 @@ classes of text.
    `/home/<name>/`, and socket paths.
 4. Ticket links to any GitHub repository other than
    sageadvicellc/trellis-crew, and links to a private tracker.
+5. Session links: a link to a Claude Code session, and a bare session id.
+   The committed allowlist cannot clear this class.
 
 A finding names the class, the file, and the line. It never prints the
 text it found.
@@ -230,7 +232,7 @@ allow @author project-codename
 ```
 
 When `SANITIZE_DENYLIST` is unset, a local run prints a warning and still
-runs the other three checks. With `SANITIZE_REQUIRE_DENYLIST=1`, an unset
+runs the other four checks. With `SANITIZE_REQUIRE_DENYLIST=1`, an unset
 deny-list fails the run. CI and `prepublishOnly` set that variable, so CI
 stays red until the maintainer adds the secret.
 

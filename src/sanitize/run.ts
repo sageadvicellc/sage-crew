@@ -25,7 +25,7 @@ export type UnsetPolicy = 'fail' | 'warn';
 
 /**
  * What an unset SANITIZE_DENYLIST does when SANITIZE_REQUIRE_DENYLIST is not
- * 1. A local run warns and still runs the other three checks, as the plan's
+ * 1. A local run warns and still runs the other four checks, as the plan's
  * decision 15 settled. CI and prepublishOnly set SANITIZE_REQUIRE_DENYLIST=1,
  * so there an unset deny-list fails. Changing this one value to 'fail' makes
  * every run fail.
@@ -269,7 +269,7 @@ function loadDenyList(opts: SanitizeOptions, root: string, failures: string[]): 
     const policy = opts.vars[REQUIRE_VAR] === '1' ? 'fail' : (opts.unsetPolicy ?? UNSET_DENYLIST_POLICY);
     const message = `${DENYLIST_VAR} is unset, so the deny-list check cannot run. Point ${DENYLIST_VAR} at your deny-list file.`;
     if (policy === 'fail') failures.push(message);
-    else opts.err(`sanitize: warning: ${message} The other three checks still run.`);
+    else opts.err(`sanitize: warning: ${message} The other four checks still run.`);
     return { list: undefined, selfPath: undefined };
   }
   const path = isAbsolute(named) ? named : resolve(opts.cwd, named);
