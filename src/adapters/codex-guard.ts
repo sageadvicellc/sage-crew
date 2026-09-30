@@ -163,36 +163,71 @@ function configProblem(top: string, home: string, answer: GitAnswer): string | u
   return undefined;
 }
 
-/** A config key pattern: the section, the subsection (`*` for any, null for none), and the variable (`*` for any). */
-type KeyPattern = [section: string, subsection: '*' | null, variable: string];
+/**
+ * A config key pattern: the section, the subsection, and the variable
+ * (`*` for any). The subsection is `none`, `any` (one must be there), or
+ * `either`. With `bang`, the value counts only when it starts with `!`,
+ * which is how git marks a shell command in that key.
+ */
+interface KeyPattern {
+  section: string;
+  subsection: 'none' | 'any' | 'either';
+  variable: string;
+  bang?: true;
+}
 
-/** The keys whose value is a command that git runs, often through a shell. */
+function pattern(section: string, subsection: KeyPattern['subsection'], variable: string, bang?: 'bang'): KeyPattern {
+  return { section, subsection, variable, ...(bang === undefined ? {} : { bang: true as const }) };
+}
+
+/** The keys whose value is a command that git runs, often through a shell, with the worktree top as its folder. */
 const COMMAND_KEYS: readonly KeyPattern[] = [
-  ['core', null, 'fsmonitor'],
-  ['core', null, 'sshcommand'],
-  ['core', null, 'editor'],
-  ['core', null, 'pager'],
-  ['core', null, 'askpass'],
-  ['core', null, 'gitproxy'],
-  ['sequence', null, 'editor'],
-  ['alias', null, '*'],
-  ['pager', null, '*'],
-  ['filter', '*', 'clean'],
-  ['filter', '*', 'smudge'],
-  ['filter', '*', 'process'],
-  ['diff', null, 'external'],
-  ['diff', '*', 'textconv'],
-  ['diff', '*', 'command'],
-  ['merge', '*', 'driver'],
-  ['difftool', '*', 'cmd'],
-  ['mergetool', '*', 'cmd'],
-  ['gpg', null, 'program'],
-  ['gpg', '*', 'program'],
-  ['credential', null, 'helper'],
-  ['credential', '*', 'helper'],
-  ['remote', '*', 'uploadpack'],
-  ['remote', '*', 'receivepack'],
+  pattern('core', 'none', 'fsmonitor'),
+  pattern('core', 'none', 'sshcommand'),
+  pattern('core', 'none', 'editor'),
+  pattern('core', 'none', 'pager'),
+  pattern('core', 'none', 'askpass'),
+  pattern('core', 'none', 'gitproxy'),
+  pattern('core', 'none', 'alternaterefscommand'),
+  pattern('sequence', 'none', 'editor'),
+  pattern('alias', 'either', '*', 'bang'),
+  pattern('pager', 'none', '*'),
+  pattern('filter', 'any', 'clean'),
+  pattern('filter', 'any', 'smudge'),
+  pattern('filter', 'any', 'process'),
+  pattern('diff', 'none', 'external'),
+  pattern('diff', 'any', 'textconv'),
+  pattern('diff', 'any', 'command'),
+  pattern('merge', 'any', 'driver'),
+  pattern('difftool', 'any', 'cmd'),
+  pattern('mergetool', 'any', 'cmd'),
+  pattern('gpg', 'none', 'program'),
+  pattern('gpg', 'any', 'program'),
+  pattern('gpg', 'any', 'defaultkeycommand'),
+  pattern('credential', 'none', 'helper'),
+  pattern('credential', 'any', 'helper'),
+  pattern('remote', 'any', 'uploadpack'),
+  pattern('remote', 'any', 'receivepack'),
+  pattern('submodule', 'any', 'update', 'bang'),
+  pattern('browser', 'any', 'cmd'),
+  pattern('man', 'any', 'cmd'),
+  // Git reads send-email settings both plain and under an identity subsection.
+  pattern('sendemail', 'either', 'smtpserver'),
+  pattern('sendemail', 'either', 'sendmailcmd'),
+  pattern('sendemail', 'either', 'tocmd'),
+  pattern('sendemail', 'either', 'cccmd'),
+  pattern('trailer', 'any', 'command'),
+  pattern('trailer', 'any', 'cmd'),
 ];
+
+/** The shells and runtimes whose next word is the script they run. Python matches with any suffix, such as python3.12. */
+const SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+const RUNTIMES: ReadonlySet<string> = new Set(['node', 'deno', 'bun', 'perl', 'ruby', 'php']);
+
+function isInterpreter(word: string): boolean {
+  const name = basename(word);
+  return SHELLS.has(name) || RUNTIMES.has(name) || name.startsWith('python');
+}
 
 /**
  * Splits a config key into its section, subsection, and variable. Git
@@ -210,10 +245,13 @@ function splitKey(key: string): { section: string; subsection: string | null; va
   };
 }
 
-function isCommandKey(key: string): boolean {
+function commandKeyOf(key: string): KeyPattern | undefined {
   const { section, subsection, variable } = splitKey(key);
-  return COMMAND_KEYS.some(
-    ([s, sub, v]) => s === section && (sub === null ? subsection === null : subsection !== null) && (v === '*' || v === variable),
+  return COMMAND_KEYS.find(
+    (p) =>
+      p.section === section &&
+      (p.subsection === 'either' || (p.subsection === 'none') === (subsection === null)) &&
+      (p.variable === '*' || p.variable === variable),
   );
 }
 
@@ -227,25 +265,43 @@ const SHELL_SPLIT = /[\s;&|(){}<>`$"'!]+/;
  * path, which resolves against the worktree top. A word with no `/`, such
  * as `%f` or `git-lfs`, is not a path. This is not a shell parser: a
  * command found on PATH, or a path built at run time, is not seen.
+ *
+ * Git runs these commands in the worktree top, so an interpreter with a
+ * bare script name, such as `sh fsmon.sh`, runs a file a session can
+ * write. So each word whose base name is a listed shell or runtime must
+ * be followed by an absolute path outside the working folder. An option,
+ * such as `sh -c` or `python3 -m`, or no word at all, refuses, which fails
+ * closed. Every word is looked at, so `env` and its `VAR=value` words
+ * never hide the interpreter after them.
  * - `core.fsmonitor` passes as a boolean, and an empty one is refused.
- * - `alias.*` counts only when it starts with `!`, which runs a shell.
+ * - `alias.*` and `submodule.*.update` count only when they start with `!`.
  */
 function commandProblem(entry: ConfigEntry, top: string, home: string): string | undefined {
-  if (!isCommandKey(entry.key) || entry.value === undefined) return undefined;
+  const matched = commandKeyOf(entry.key);
+  if (matched === undefined || entry.value === undefined) return undefined;
   const { section, variable } = splitKey(entry.key);
   const value = entry.value;
   if (section === 'core' && variable === 'fsmonitor') {
     if (GIT_BOOLEAN.test(value)) return undefined;
     if (value.trim() === '') return `${entry.key} is empty, so it cannot be checked`;
   }
-  if (section === 'alias' && !value.startsWith('!')) return undefined;
-  for (const word of value.split(SHELL_SPLIT)) {
-    if (word === '' || !(word.includes('/') || word.startsWith('.') || word.startsWith('~'))) continue;
+  if (matched.bang === true && !value.startsWith('!')) return undefined;
+  const inside = (path: string) => path === top || within(path, top);
+  const words = value.split(SHELL_SPLIT).filter((word) => word !== '');
+  for (const word of words) {
+    if (!(word.includes('/') || word.startsWith('.') || word.startsWith('~'))) continue;
     const resolved = resolveConfigPath(word, top, home);
     if (resolved === undefined) return `${entry.key} is ${printable(value)}, which names another user's home folder, so it cannot be checked`;
-    if (resolved === top || within(resolved, top)) {
+    if (inside(resolved)) {
       return `${entry.key} is ${printable(value)}, and the path ${printable(word)} in it resolves to ${printable(resolved)}, inside the working folder, so a session could write the command git runs`;
     }
+  }
+  for (const [i, word] of words.entries()) {
+    if (!isInterpreter(word)) continue;
+    const next = words[i + 1];
+    if (next !== undefined && isAbsolute(next) && !inside(realOfExisting(next))) continue;
+    const after = next === undefined ? 'nothing' : printable(next);
+    return `${entry.key} is ${printable(value)}, and the interpreter ${printable(word)} in it has ${after} after it, not an absolute path outside the working folder, so it cannot be checked`;
   }
   return undefined;
 }

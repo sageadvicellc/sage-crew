@@ -424,6 +424,9 @@ describe('the Codex working folder feeds git no config file or fsmonitor command
   });
 });
 
+/** A table test spawns about ten git processes per case, so it gets more than the default five seconds. */
+const TABLE_TIMEOUT_MS = 30_000;
+
 /** The refusal for a command key whose path word resolves inside the working folder. */
 function commandInside(key: string, value: string, word: string): RegExp {
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -451,12 +454,17 @@ describe('the Codex working folder: a command git runs names no path inside it',
       'diff.Word.command', 'merge.Ours.driver', 'difftool.Meld.cmd', 'mergetool.Meld.cmd', 'gpg.program', 'gpg.ssh.program',
       'credential.helper', 'credential.https://example.com.helper', 'remote.origin.uploadpack', 'remote.origin.receivepack',
     ];
+    // One repo for the whole table: each case sets the key, checks, and unsets it again.
+    const repo = makeFixtureRepo();
     for (const key of keys) {
       const shown = key.replace(/^([^.]+)\./, (_m, section: string) => `${section.toLowerCase()}.`).replace(/\.([^.]+)$/, (_m, name: string) => `.${name.toLowerCase()}`);
-      for (const problem of await both(withConfig(key, './tools/x').root)) expect(problem).toMatch(commandInside(shown, './tools/x', './tools/x'));
-      expect(await both(withConfig(key, outside).root)).toEqual([undefined, undefined]);
+      repo.git('config', key, './tools/x');
+      for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside(shown, './tools/x', './tools/x'));
+      repo.git('config', key, outside);
+      expect(await both(repo.root)).toEqual([undefined, undefined]);
+      repo.git('config', '--unset', key);
     }
-  });
+  }, TABLE_TIMEOUT_MS);
 
   it('refuses an interpreter with an in-tree script, as a shell reads it', async () => {
     const repo = withConfig('core.fsmonitor', '/bin/sh tools/fsmon.sh');
@@ -506,7 +514,7 @@ describe('the Codex working folder: a command git runs names no path inside it',
       const repo = withConfig('core.pager', value as string);
       for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside('core.pager', value as string, word as string));
     }
-  });
+  }, TABLE_TIMEOUT_MS);
 
   it('resolves ~/ against the home folder, and refuses ~user', async () => {
     const repo = makeFixtureRepo();
@@ -517,6 +525,116 @@ describe('the Codex working folder: a command git runs names no path inside it',
     const other = withConfig('core.pager', 'less ~someone/p');
     for (const problem of await both(other.root)) {
       expect(problem).toMatch(/: core\.pager is less ~someone\/p, which names another user's home folder, so it cannot be checked\.$/);
+    }
+  });
+});
+
+/** The refusal for an interpreter whose next word is not an absolute path outside the working folder. */
+function interpreterRefused(key: string, value: string, interpreter: string, next: string | null): RegExp {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const after = next === null ? 'nothing after it' : `${escape(next)} after it`;
+  return new RegExp(
+    `: ${escape(key)} is ${escape(value)}, and the interpreter ${escape(interpreter)} in it has ${after}, not an absolute path outside the working folder, so it cannot be checked\\.$`,
+  );
+}
+
+describe('the Codex working folder: an interpreter in a command must run a script outside it', () => {
+  const both = async (cwd: string, home = makeFixtureHome()): Promise<[string | undefined, string | undefined]> => [
+    await checkWorkdir(makeTestEnv({ cwd, home }), recordingRunner()),
+    checkWorkdirSync(cwd, home),
+  ];
+  const withConfig = (key: string, value: string) => {
+    const repo = makeFixtureRepo();
+    repo.git('config', key, value);
+    return repo;
+  };
+  const expectRefused = async (key: string, value: string, interpreter: string, next: string | null, shown = key) => {
+    for (const problem of await both(withConfig(key, value).root)) expect(problem).toMatch(interpreterRefused(shown, value, interpreter, next));
+  };
+
+  it('refuses an interpreter with a bare script name, since git runs it in the working folder', async () => {
+    await expectRefused('core.fsmonitor', 'sh fsmon.sh', 'sh', 'fsmon.sh');
+    await expectRefused('filter.x.clean', 'node clean.js', 'node', 'clean.js');
+    await expectRefused('alias.go', '!sh go.sh', 'sh', 'go.sh');
+  });
+
+  it('looks past env and its VAR=value words', async () => {
+    await expectRefused('core.editor', '/usr/bin/env python3 x.py', 'python3', 'x.py');
+    await expectRefused('core.editor', 'env FOO=1 BAR=2 python3.12 x.py', 'python3.12', 'x.py');
+  });
+
+  it('refuses an option after the interpreter, and an interpreter as the last word, which fails closed', async () => {
+    await expectRefused('core.pager', 'python3 -m foo', 'python3', '-m');
+    await expectRefused('core.pager', 'sh -c ls', 'sh', '-c');
+    await expectRefused('core.pager', 'less | sh', 'sh', null);
+  });
+
+  it('knows every listed shell and runtime, by base name, and python with any suffix', async () => {
+    const names = ['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'node', 'deno', 'bun', 'perl', 'ruby', 'php', 'python', 'python3', 'python3.12'];
+    const repo = makeFixtureRepo();
+    for (const name of names) {
+      const value = `/usr/local/bin/${name} run.x`;
+      repo.git('config', 'core.pager', value);
+      for (const problem of await both(repo.root)) expect(problem).toMatch(interpreterRefused('core.pager', value, `/usr/local/bin/${name}`, 'run.x'));
+      repo.git('config', 'core.pager', `/usr/local/bin/${name} /opt/outside/x`);
+      expect(await both(repo.root)).toEqual([undefined, undefined]);
+    }
+  }, TABLE_TIMEOUT_MS);
+
+  it('passes an interpreter that runs an absolute script outside the folder, and refuses one inside', async () => {
+    expect(await both(withConfig('core.fsmonitor', '/bin/sh /opt/outside/x.sh').root)).toEqual([undefined, undefined]);
+    const repo = makeFixtureRepo();
+    repo.git('config', 'core.fsmonitor', `/bin/sh ${join(repo.root, 'x.sh')}`);
+    for (const problem of await both(repo.root)) expect(problem).toMatch(/: core\.fsmonitor is .*, and the path .*x\.sh in it resolves to .*, inside the working folder/);
+  });
+
+  it('matches a dotted alias that starts with !, and passes one that does not', async () => {
+    for (const problem of await both(withConfig('alias.a.b', '!./x').root)) expect(problem).toMatch(commandInside('alias.a.b', '!./x', './x'));
+    expect(await both(withConfig('alias.a.b', 'log ./x').root)).toEqual([undefined, undefined]);
+  });
+});
+
+describe('the Codex working folder: the added command keys', () => {
+  const both = async (cwd: string, home = makeFixtureHome()): Promise<[string | undefined, string | undefined]> => [
+    await checkWorkdir(makeTestEnv({ cwd, home }), recordingRunner()),
+    checkWorkdirSync(cwd, home),
+  ];
+  const withConfig = (key: string, value: string) => {
+    const repo = makeFixtureRepo();
+    repo.git('config', key, value);
+    return repo;
+  };
+  const lower = (key: string) =>
+    key.replace(/^([^.]+)\./, (_m, section: string) => `${section.toLowerCase()}.`).replace(/\.([^.]+)$/, (_m, name: string) => `.${name.toLowerCase()}`);
+
+  it('refuses ./tools/x in each added key, and passes a path outside', async () => {
+    const outside = join(makeFixtureHome(), 'x');
+    const keys = [
+      'gpg.ssh.defaultKeyCommand', 'browser.Firefox.cmd', 'man.Woman.cmd',
+      'sendemail.smtpServer', 'sendemail.sendmailCmd', 'sendemail.toCmd', 'sendemail.ccCmd',
+      'sendemail.Work.smtpServer', 'sendemail.Work.sendmailCmd', 'sendemail.Work.toCmd', 'sendemail.Work.ccCmd',
+      'trailer.Sign.command', 'trailer.Sign.cmd', 'core.alternateRefsCommand',
+    ];
+    const repo = makeFixtureRepo();
+    for (const key of keys) {
+      repo.git('config', key, './tools/x');
+      for (const problem of await both(repo.root)) expect(problem).toMatch(commandInside(lower(key), './tools/x', './tools/x'));
+      repo.git('config', key, outside);
+      expect(await both(repo.root)).toEqual([undefined, undefined]);
+      repo.git('config', '--unset', key);
+    }
+  }, TABLE_TIMEOUT_MS);
+
+  it('checks submodule.*.update only when it starts with !, so checkout and rebase pass', async () => {
+    for (const problem of await both(withConfig('submodule.Lib.update', '!./tools/x').root)) {
+      expect(problem).toMatch(commandInside('submodule.Lib.update', '!./tools/x', './tools/x'));
+    }
+    for (const problem of await both(withConfig('submodule.Lib.update', '!sh up.sh').root)) {
+      expect(problem).toMatch(interpreterRefused('submodule.Lib.update', '!sh up.sh', 'sh', 'up.sh'));
+    }
+    expect(await both(withConfig('submodule.Lib.update', `!${join(makeFixtureHome(), 'x')}`).root)).toEqual([undefined, undefined]);
+    for (const plain of ['checkout', 'rebase', 'merge', 'none']) {
+      expect(await both(withConfig('submodule.Lib.update', plain).root)).toEqual([undefined, undefined]);
     }
   });
 });

@@ -214,8 +214,11 @@ no symbolic link during that search. It refuses a folder whose
 hook there. For the same reason, it refuses a command in the git
 settings that names a path inside the folder. Examples are
 `core.fsmonitor`, `core.sshCommand`, a filter, and an alias that starts
-with `!`. This test is not a shell parser. It does not see a command
-found on `PATH`, or a path built at run time. Through `include.path` or `includeIf`, git can read a
+with `!`. Git runs these commands in the worktree top. So in them, a
+shell or a runtime, such as `sh` or `python3`, must run an absolute
+path outside the folder. This test is not a shell parser. It does
+not see a command found on `PATH`, or a path built at run time.
+Through `include.path` or `includeIf`, git can read a
 settings file from inside the folder. The CLI refuses the folder then.
 The folder's own `.git` is allowed, and so is a settings file inside
 that `.git`. Each of these git
