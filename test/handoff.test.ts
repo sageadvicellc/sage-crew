@@ -1,11 +1,12 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CrewError } from '../src/crew/schema.ts';
 import { loadHandoff, MAX_HANDOFF_BYTES, MAX_TIMED_JOBS, parseHandoff } from '../src/teardown/handoff.ts';
 import { lineContaining, makeFifo, quoted } from './helpers/crew.ts';
 import { makeFixtureHome } from './helpers/env.ts';
-import { HANDOFF_BODY, HEAD_SHA1, HEAD_SHA256, handoffText, type HandoffParts } from './helpers/handoff.ts';
+import { repoRoot } from './helpers/paths.ts';
+import { HANDOFF_BODY, HEAD_SHA1, HEAD_SHA256, handoffText, WRITTEN_AT, type HandoffParts } from './helpers/handoff.ts';
 
 const FILE = 'worker-1.md';
 const SESSION = 'worker-1';
@@ -104,6 +105,17 @@ describe('handoff: a valid file', () => {
   });
 });
 
+describe('handoff: the documented example', () => {
+  it('the full example in docs/handoff-format.md parses', () => {
+    const doc = readFileSync(join(repoRoot, 'docs', 'handoff-format.md'), 'utf8');
+    const example = /```markdown\n([\s\S]*?)```/.exec(doc)?.[1];
+    expect(example).toBeDefined();
+    const result = parseHandoff(example ?? '', 'worker-1.md', 'worker-1');
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.ok && result.handoff.timed_jobs[0]?.schedule).toBe('*/10 * * * *');
+  });
+});
+
 describe('handoff: the front matter frame', () => {
   it('fails a file that does not start with a --- line', () => {
     expectError(`version: 1\n${HANDOFF_BODY}`, '(file)', /start with a --- line/, 1);
@@ -135,7 +147,7 @@ describe('handoff: the front matter frame', () => {
   });
 
   it('fails an alias and does not expand it', () => {
-    const text = textOf({ fields: { branch: '&b feat/example' }, extra: ['written: *b'] });
+    const text = textOf({ fields: { branch: '&b feat/example', written: '*b' } });
     expect(errorsOf(text).some((e) => /alias/i.test(e.reason))).toBe(true);
   });
 
@@ -151,7 +163,7 @@ describe('handoff: the front matter frame', () => {
 });
 
 describe('handoff: the fields', () => {
-  it.each(['version', 'session', 'status', 'writing', 'push'])('%s is required', (field) => {
+  it.each(['version', 'session', 'status', 'writing', 'push', 'written'])('%s is required', (field) => {
     expectError(textOf({ fields: { [field]: null } }), field, /required/);
   });
 
@@ -288,6 +300,42 @@ describe('loadHandoff', () => {
     const loaded = loadHandoff(file, SESSION);
     expect(loaded.state).toBe('invalid');
     if (loaded.state === 'invalid') expect(loaded.errors.every((e) => e.file === file)).toBe(true);
+  });
+
+  it('makes a throw from the parser an invalid handoff with the message, not a crash', () => {
+    const file = join(tempDir(), 'worker-1.md');
+    writeFileSync(file, handoffText(SESSION));
+    const parse = () => {
+      throw new Error('fixture: parser failure');
+    };
+    const loaded = loadHandoff(file, SESSION, { parse });
+    expect(loaded.state).toBe('invalid');
+    if (loaded.state === 'invalid') {
+      expect(loaded.errors).toHaveLength(1);
+      expect(loaded.errors[0]).toMatchObject({ file, line: 1, field: '(file)' });
+      expect(loaded.errors[0]?.reason).toMatch(/fixture: parser failure/);
+    }
+  });
+
+  it('marks a handoff written before notBefore as stale', () => {
+    const file = join(tempDir(), 'worker-1.md');
+    writeFileSync(file, handoffText(SESSION, { fields: { written: '2025-12-31T23:59:59Z' } }));
+    const loaded = loadHandoff(file, SESSION, { notBefore: Date.parse(WRITTEN_AT) });
+    expect(loaded).toMatchObject({ state: 'stale', notBefore: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('counts a handoff written in the same second as notBefore, because the time is often written to the second', () => {
+    const file = join(tempDir(), 'worker-1.md');
+    writeFileSync(file, handoffText(SESSION, { fields: { written: '2026-01-01T00:00:00Z' } }));
+    expect(loadHandoff(file, SESSION, { notBefore: Date.parse('2026-01-01T00:00:00.900Z') }).state).toBe('ok');
+    expect(loadHandoff(file, SESSION, { notBefore: Date.parse('2026-01-01T00:00:01Z') }).state).toBe('stale');
+  });
+
+  it('compares times across zones', () => {
+    const file = join(tempDir(), 'worker-1.md');
+    writeFileSync(file, handoffText(SESSION, { fields: { written: '2026-01-01T01:00:00+02:00' } }));
+    expect(loadHandoff(file, SESSION, { notBefore: Date.parse('2025-12-31T23:30:00Z') }).state).toBe('stale');
+    expect(loadHandoff(file, SESSION, { notBefore: Date.parse('2025-12-31T22:30:00Z') }).state).toBe('ok');
   });
 
   it('refuses a symbolic link and does not follow it', () => {

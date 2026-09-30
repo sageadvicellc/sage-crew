@@ -59,13 +59,33 @@ export interface Handoff {
   branch: string | null;
   head: string | null;
   timed_jobs: TimedJob[];
-  written?: string;
+  /** When the session wrote the file, in ISO 8601 with a zone. */
+  written: string;
 }
 
 export type HandoffParseResult = { ok: true; handoff: Handoff } | { ok: false; errors: CrewError[] };
 
-/** A handoff as the loader found it. A missing file is a session that has not confirmed yet. */
-export type HandoffLoad = { state: 'missing' } | { state: 'invalid'; errors: CrewError[] } | { state: 'ok'; handoff: Handoff };
+/**
+ * A handoff as the loader found it. A missing file is a session that has
+ * not confirmed yet. A stale file is valid but was written before this
+ * teardown started, so it is from an earlier run and confirms nothing.
+ */
+export type HandoffLoad =
+  | { state: 'missing' }
+  | { state: 'invalid'; errors: CrewError[] }
+  | { state: 'stale'; handoff: Handoff; notBefore: string }
+  | { state: 'ok'; handoff: Handoff };
+
+export interface LoadHandoffOptions {
+  /**
+   * The time this teardown started, in milliseconds. A handoff written
+   * before the start of that second is stale. The whole second counts,
+   * because a session often writes the time to the second only.
+   */
+  notBefore?: number;
+  /** The parser. Tests pass a stand-in. */
+  parse?: typeof parseHandoff;
+}
 
 function checkVersion(c: Checker, root: YAMLMap): void {
   const pair = requiredPair(c, root, 'version', 'version');
@@ -148,7 +168,7 @@ function checkTimedJobs(c: Checker, root: YAMLMap): TimedJob[] {
 }
 
 function checkWritten(c: Checker, root: YAMLMap): string | undefined {
-  const pair = pairOf(root, 'written');
+  const pair = requiredPair(c, root, 'written', 'written');
   if (!pair) return undefined;
   const value = scalarOf(pair);
   if (typeof value === 'string' && WRITTEN_PATTERN.test(value) && !Number.isNaN(Date.parse(value))) return value;
@@ -237,28 +257,45 @@ export function parseHandoff(text: string, file: string, expectedSession: string
     writing === undefined ||
     push === undefined ||
     branch === undefined ||
-    head === undefined
+    head === undefined ||
+    written === undefined
   ) {
     return { ok: false, errors: c.errors };
   }
-  const handoff: Handoff = { version: HANDOFF_VERSION, session, status, writing, push, branch, head, timed_jobs: timedJobs };
-  if (written !== undefined) handoff.written = written;
-  return { ok: true, handoff };
+  return { ok: true, handoff: { version: HANDOFF_VERSION, session, status, writing, push, branch, head, timed_jobs: timedJobs, written } };
+}
+
+/** The start of the second that holds `ms`, so a time written to the second still counts. */
+function startOfSecond(ms: number): number {
+  return Math.floor(ms / 1000) * 1000;
 }
 
 /**
  * Reads one handoff file and checks it, with the same safety as crew.yml:
  * one open, no symbolic link followed, a regular file of at most 64 KiB.
- * A missing file, or a file in a missing folder, is `missing`.
+ * A missing file, or a file in a missing folder, is `missing`. With
+ * `notBefore`, a file written before the second of that time is `stale`.
+ * A throw from the parser makes the file `invalid`, never a crash.
  */
-export function loadHandoff(path: string, expectedSession: string): HandoffLoad {
+export function loadHandoff(path: string, expectedSession: string, options: LoadHandoffOptions = {}): HandoffLoad {
   const read = readOnce(path, MAX_HANDOFF_BYTES);
-  if ('text' in read) {
-    const parsed = parseHandoff(read.text, path, expectedSession);
-    return parsed.ok ? { state: 'ok', handoff: parsed.handoff } : { state: 'invalid', errors: parsed.errors };
+  if (!('text' in read)) {
+    if (read.code === 'ENOENT') return { state: 'missing' };
+    return { state: 'invalid', errors: [{ file: path, line: 1, field: '(file)', reason: read.reason }] };
   }
-  if (read.code === 'ENOENT') return { state: 'missing' };
-  return { state: 'invalid', errors: [{ file: path, line: 1, field: '(file)', reason: read.reason }] };
+  let parsed: HandoffParseResult;
+  try {
+    parsed = (options.parse ?? parseHandoff)(read.text, path, expectedSession);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { state: 'invalid', errors: [{ file: path, line: 1, field: '(file)', reason: `the file cannot be checked: ${message}` }] };
+  }
+  if (!parsed.ok) return { state: 'invalid', errors: parsed.errors };
+  const { notBefore } = options;
+  if (notBefore !== undefined && Date.parse(parsed.handoff.written) < startOfSecond(notBefore)) {
+    return { state: 'stale', handoff: parsed.handoff, notBefore: new Date(startOfSecond(notBefore)).toISOString() };
+  }
+  return { state: 'ok', handoff: parsed.handoff };
 }
 
 /** True when a handoff confirms the session is done and holds no write in progress. */

@@ -50,10 +50,15 @@ lines that hold only `---`. A Markdown body follows.
 | `branch` | with `pushed` | The branch name, or `null`. It must not start with `-`. |
 | `head` | with `pushed` | The head commit id, as 40 or 64 lowercase hex characters, or `null`. |
 | `timed_jobs` | no | A list of at most 20 jobs. Each job is a map with `schedule` and `prompt`. |
-| `written` | no | The time the file was written, in ISO 8601 with a zone, such as `2026-01-02T03:04:05Z`. |
+| `written` | yes | The time the file was written, in ISO 8601 with a zone, such as `2026-01-02T03:04:05Z`. |
 
 A missing `branch` or `head` is `null`. When `push` is `pushed`, both must
 be set.
+
+Put the values of `session`, `schedule`, `prompt`, and `written` in double
+quotes. A schedule such as `*/10 * * * *` starts with `*`, and YAML reads an
+unquoted `*` as an alias. Inside the quotes, write `\"` for a quote and `\\`
+for a backslash.
 
 A timed job is a job that lives only inside a session, such as a loop that
 reads the mailbox every ten minutes. The job ends with the session. So the
@@ -81,6 +86,11 @@ or that holds them in another order, fails the file.
 
 - The file is a regular file of at most 64 KiB. Teardown never follows a
   symbolic link, and it refuses a link as an invalid handoff.
+- Teardown reads each folder part of the path with lstat, and then it
+  opens the file with `O_NOFOLLOW`. That flag covers only the last part of
+  the path. When another writer swaps a folder part for a link between the
+  lstat call and the open, the open follows that link. So keep the
+  handoff folder private to the operator.
 - The front matter is one YAML document. Each key appears once. An alias,
   a merge key, or a tag outside the YAML core schema fails the file.
 - An unknown field fails the file. It is not ignored, so a spelling mistake
@@ -94,7 +104,7 @@ This file is `.crew/handoffs/worker-1.md`, for a `crew.yml` whose
 ```markdown
 ---
 version: 1
-session: worker-1
+session: "worker-1"
 status: done
 writing: false
 push: pushed
@@ -102,8 +112,8 @@ branch: feat/example
 head: 0123456789abcdef0123456789abcdef01234567
 timed_jobs:
   - schedule: "*/10 * * * *"
-    prompt: Read the mailbox and answer each new message.
-written: 2026-01-02T03:04:05Z
+    prompt: "Read the mailbox and answer each new message."
+written: "2026-01-02T03:04:05Z"
 ---
 
 ## Open items
@@ -122,9 +132,13 @@ written: 2026-01-02T03:04:05Z
 ## How teardown reads a handoff
 
 Teardown reads the handoff folder every 5 seconds, until every session is
-confirmed or the timeout passes.
+confirmed or the timeout passes. It counts only a handoff that is written
+at or after the second in which the teardown run started. So start the
+teardown run first, and then ask each session for its handoff.
 
 - A missing file means the session has not confirmed yet.
+- A valid file with a `written` time before the teardown run started is
+  from an earlier run. It confirms nothing, and teardown keeps waiting.
 - A valid file with a `status` other than `done` means the same.
 - A valid file with `status: done` and `writing: false` confirms the
   session.
@@ -136,17 +150,30 @@ confirmed or the timeout passes.
   a session can fix it before the timeout.
 
 When every session is confirmed and no session has a write in progress,
-teardown stops the team. In any other case, it stops nothing, keeps the
-team record, and names each session that blocked the stop.
+teardown reads every handoff once more. When a session changed after it
+confirmed, teardown blocks the stop. When every session is still
+confirmed, teardown stops the team. In any other case, it stops nothing,
+keeps the team record, and names each session that blocked the stop.
+
+Two entries with one name in the team record also block the stop, because
+one handoff cannot confirm two processes.
 
 ## The timed jobs file
 
-Teardown collects every timed job from every confirmed handoff. When it
-goes on to stop the team, it first writes them to
-`<handoffs>/timed-jobs.yml`, with mode 0600. It writes a temporary file and
-renames it, so a reader never sees half a file. When the stop is blocked,
-teardown writes no timed jobs file, so the file never holds a partial list.
-A dry run writes no file either.
+Teardown collects every timed job from every confirmed handoff. When
+every session is confirmed, it first writes them to
+`<handoffs>/timed-jobs.yml`, with mode 0600, and then it starts the stop.
+It writes a temporary file and renames it, so a reader never sees half a
+file. When the stop is blocked before it starts, teardown writes no timed
+jobs file. A dry run writes no file either.
+
+The file does not prove that the team stopped. When the stop starts but
+cannot end a process, the file stays. So a start script also reads the
+output of the teardown run, or reads the team record.
+
+The sessions wrote every job in the file. Treat the file as input from the
+sessions, not as a list that the operator approved. So the start step shows
+each job to the operator before it creates one.
 
 ```yaml
 version: 1
@@ -166,8 +193,10 @@ jobs:
 1. Read `crew.yml`, and take `teardown.handoffs`. Resolve it against the
    folder that holds `crew.yml`.
 2. Read `timed-jobs.yml` from that folder. Its `version` must be `1`.
-   Give each job to the new session that its `session` field names. That
-   session creates the job again with its `schedule` and `prompt`.
+   Show each job to the operator: its session, its schedule, and its
+   prompt. When the operator accepts a job, give it to the new session
+   that its `session` field names. That session creates the job again
+   with its `schedule` and `prompt`.
 3. For each session, read `<session name>.md`. Split the file at its two
    `---` lines. Parse the front matter as YAML. Its `version` must be `1`,
    and its `session` must equal the name in the file name.

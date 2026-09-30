@@ -8,6 +8,9 @@ export const HEAD_SHA1 = '0123456789abcdef0123456789abcdef01234567';
 /** A 64-character commit id. */
 export const HEAD_SHA256 = `${HEAD_SHA1}${'89abcdef'.repeat(3)}`;
 
+/** The default `written` time. Teardown tests start their fake clock at this time. */
+export const WRITTEN_AT = '2026-01-01T00:00:00Z';
+
 /** A body with the three headings in order. */
 export const HANDOFF_BODY = [
   '## Open items',
@@ -45,6 +48,7 @@ export function handoffText(session: string, parts: HandoffParts = {}): string {
     push: 'pushed',
     branch: 'feat/example',
     head: HEAD_SHA1,
+    written: WRITTEN_AT,
   };
   const merged = { ...defaults, ...parts.fields };
   const lines = ['---'];

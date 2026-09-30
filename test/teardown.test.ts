@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -7,7 +7,7 @@ import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, main } from '../src/cli.ts';
 import { POLL_INTERVAL_MS, TIMED_JOBS_FILE } from '../src/commands/teardown.ts';
 import { teamJsonPath, writeTeam, type TeamEntry } from '../src/store/team-json.ts';
 import { crewYml } from './helpers/crew.ts';
-import { HEAD_SHA1, writeHandoff, type HandoffParts } from './helpers/handoff.ts';
+import { HEAD_SHA1, WRITTEN_AT, writeHandoff, type HandoffParts } from './helpers/handoff.ts';
 import { claudeInstalled, type Harnessed } from './helpers/team.ts';
 
 interface Rig extends Harnessed {
@@ -28,7 +28,7 @@ interface RigOptions {
   noTeam?: boolean;
 }
 
-const START = Date.parse('2026-01-01T00:00:00Z');
+const START = Date.parse(WRITTEN_AT);
 
 /**
  * A fixture project in the Env's current folder: a crew.yml with a
@@ -288,6 +288,106 @@ describe('teardown: confirm and stop', () => {
     expect(kills(t)).toEqual([4101, 4102]);
   });
 
+  it('repeats every push warning in one summary line at the end of the run', async () => {
+    const t = rig({ sessions: ['worker-1', 'worker-2', 'worker-3'] });
+    confirm(t, 'worker-1', { fields: { push: 'failed' } });
+    confirm(t, 'worker-2');
+    confirm(t, 'worker-3', { fields: { push: 'failed', branch: 'null', head: 'null' } });
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_OK);
+    expect(kills(t)).toEqual([4101, 4102, 4103]);
+    expect(t.err.lines.at(-1)).toMatch(/^warning: the push failed for 2 session\(s\): worker-1, worker-3\./);
+  });
+
+  it('prints the push summary last on a blocked run and on a dry run too', async () => {
+    const blocked = rig();
+    confirm(blocked, 'worker-1', { fields: { push: 'failed' } });
+    expect(await main(['teardown'], blocked.deps)).toBe(EXIT_RUNTIME);
+    expect(blocked.err.lines.at(-1)).toMatch(/^warning: the push failed for 1 session\(s\): worker-1\./);
+
+    const dry = rig();
+    confirm(dry, 'worker-1', { fields: { push: 'failed' } });
+    expect(await main(['teardown', '--dry-run'], dry.deps)).toBe(EXIT_OK);
+    expect(dry.err.lines.at(-1)).toMatch(/^warning: the push failed for 1 session\(s\): worker-1\./);
+  });
+
+  it('prints no push summary when every push went well', async () => {
+    const t = rig();
+    confirm(t, 'worker-1');
+    confirm(t, 'worker-2');
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_OK);
+    expect(t.err.text()).not.toMatch(/push failed/);
+  });
+
+  it('a leftover handoff from an earlier team does not confirm, and nothing is signalled', async () => {
+    const t = rig();
+    confirm(t, 'worker-1');
+    confirm(t, 'worker-2', { fields: { written: '2025-12-31T12:00:00Z' } });
+    const before = readFileSync(teamJsonPath(t.env), 'utf8');
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
+    expect(t.sleeps).toEqual([POLL_INTERVAL_MS, POLL_INTERVAL_MS]);
+    expect(t.runner.calls).toEqual([]);
+    expect(readFileSync(teamJsonPath(t.env), 'utf8')).toBe(before);
+    expect(t.out.text()).toMatch(
+      /worker-2: not confirmed by the timeout \(10 s\)\. Its handoff was written at 2025-12-31T12:00:00Z, before this teardown started at 2026-01-01T00:00:00\.000Z/,
+    );
+    expect(t.err.text()).toMatch(/Blocked by: worker-2 \(not confirmed\)/);
+    expect(existsSync(join(t.handoffs, TIMED_JOBS_FILE))).toBe(false);
+  });
+
+  it('a leftover handoff that the session writes again during the wait confirms', async () => {
+    const t = rig();
+    confirm(t, 'worker-1');
+    confirm(t, 'worker-2', { fields: { written: '2025-12-31T12:00:00Z' } });
+    t.hooks.onSleep = () => confirm(t, 'worker-2', { fields: { written: '2026-01-01T00:00:05Z' } });
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_OK);
+    expect(kills(t)).toEqual([4101, 4102]);
+  });
+
+  it('reads every handoff once more before the stop, and blocks when a settled session changed', async () => {
+    const t = rig();
+    confirm(t, 'worker-1', { extra: ['timed_jobs:', '  - schedule: every hour', '    prompt: Check.'] });
+    // worker-1 settles on the first pass. During the wait, worker-2
+    // confirms and worker-1 starts a new write.
+    t.hooks.onSleep = () => {
+      confirm(t, 'worker-2');
+      confirm(t, 'worker-1', { fields: { writing: 'true' } });
+    };
+    const before = readFileSync(teamJsonPath(t.env), 'utf8');
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
+    expect(t.sleeps).toEqual([POLL_INTERVAL_MS]);
+    expect(t.runner.calls).toEqual([]);
+    expect(readFileSync(teamJsonPath(t.env), 'utf8')).toBe(before);
+    expect(existsSync(join(t.handoffs, TIMED_JOBS_FILE))).toBe(false);
+    expect(t.out.text()).toMatch(/worker-1: changed after it confirmed/);
+    expect(t.err.text()).toMatch(/Blocked by: worker-1 \(a write is in progress\)/);
+    expect(t.err.text()).not.toMatch(/Blocked by: .*worker-2/);
+  });
+
+  it('blocks the stop when the final read finds a handoff gone', async () => {
+    const t = rig();
+    confirm(t, 'worker-1');
+    t.hooks.onSleep = () => {
+      confirm(t, 'worker-2');
+      writeFileSync(join(t.handoffs, 'worker-1.md'), 'no longer a handoff');
+    };
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
+    expect(t.runner.calls).toEqual([]);
+    expect(t.err.text()).toMatch(/Blocked by: worker-1 \(handoff invalid\)/);
+  });
+
+  it('two team entries with one name block the stop, and the report names the duplicate', async () => {
+    const t = rig({ sessions: ['worker-1', 'worker-1', 'worker-2'] });
+    confirm(t, 'worker-1');
+    confirm(t, 'worker-2');
+    const before = readFileSync(teamJsonPath(t.env), 'utf8');
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
+    expect(t.runner.calls).toEqual([]);
+    expect(readFileSync(teamJsonPath(t.env), 'utf8')).toBe(before);
+    expect(t.err.text()).toMatch(/warning: the team record lists the session "worker-1" 2 times/);
+    expect(t.err.text()).toMatch(/Blocked by: worker-1 \(listed 2 times in the team record\)/);
+    expect(t.err.text()).not.toMatch(/Blocked by: .*worker-2/);
+  });
+
   it('a session name that breaks the path-safe rule is skipped, named, and blocks the stop', async () => {
     const t = rig({ sessions: ['worker-1', '../escape'] });
     confirm(t, 'worker-1');
@@ -370,6 +470,30 @@ describe('teardown: the handoff folder', () => {
     expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
     expect(t.err.text()).toMatch(/not a folder/);
     expect(t.runner.calls).toEqual([]);
+  });
+
+  it('names the error code when a folder part cannot be checked', async (context) => {
+    if (process.getuid?.() === 0) context.skip();
+    const t = rig();
+    const crew = join(t.project, '.crew');
+    mkdirSync(crew);
+    chmodSync(crew, 0o000);
+    try {
+      expect(await main(['teardown'], t.deps)).toBe(EXIT_RUNTIME);
+    } finally {
+      chmodSync(crew, 0o700);
+    }
+    expect(t.err.text()).toMatch(/cannot check the handoff folder \(EACCES\)/);
+    expect(t.runner.calls).toEqual([]);
+  });
+
+  it('creates a missing handoff folder one private part at a time before it writes the jobs file', async () => {
+    const t = rig({ sessions: [] });
+    expect(await main(['teardown'], t.deps)).toBe(EXIT_OK);
+    expect(statSync(join(t.project, '.crew')).mode & 0o777).toBe(0o700);
+    expect(statSync(t.handoffs).mode & 0o777).toBe(0o700);
+    expect(parse(readFileSync(join(t.handoffs, TIMED_JOBS_FILE), 'utf8'))).toEqual({ version: 1, jobs: [] });
+    expect(existsSync(teamJsonPath(t.env))).toBe(false);
   });
 
   it('treats a missing folder as no session confirmed yet', async () => {
@@ -481,6 +605,16 @@ describe('teardown --dry-run', () => {
     expect(await main(['teardown', '--dry-run'], t.deps)).toBe(EXIT_OK);
     expect(existsSync(t.handoffs)).toBe(false);
     expect(existsSync(join(t.project, '.crew'))).toBe(false);
+    expect(t.runner.calls).toEqual([]);
+  });
+
+  it('shows a leftover handoff as not confirmed', async () => {
+    const t = rig();
+    confirm(t, 'worker-1');
+    confirm(t, 'worker-2', { fields: { written: '2025-12-31T12:00:00Z' } });
+    expect(await main(['teardown', '--dry-run'], t.deps)).toBe(EXIT_OK);
+    expect(t.out.text()).toMatch(/worker-2: not confirmed yet\. Its handoff was written at 2025-12-31T12:00:00Z/);
+    expect(t.out.text()).toMatch(/would not stop the team/);
     expect(t.runner.calls).toEqual([]);
   });
 
