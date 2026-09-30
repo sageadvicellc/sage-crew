@@ -27,6 +27,48 @@ export function loadForHarness(options: Omit<LoadOptions, 'harness'>, deps: CliD
   return loadTeam({ ...options, harness: first.config.harness });
 }
 
+export interface StartOptions {
+  workers?: number;
+  roles?: string;
+  yes: boolean;
+  /** The harness the team must run on, from `up --harness`. A roles file that names another one is refused. */
+  harness?: HarnessId;
+}
+
+/**
+ * The start path: loads the team, confirms a roles file found in this
+ * folder, and launches every session. `start` and `up` both run it.
+ */
+export async function runStart(options: StartOptions, deps: CliDeps): Promise<number> {
+  const loaded = loadForHarness(
+    {
+      env: deps.env,
+      ...(options.roles === undefined ? {} : { roles: options.roles }),
+      ...(options.workers === undefined ? {} : { workers: options.workers }),
+    },
+    deps,
+  );
+  if (!loaded.ok) {
+    for (const line of loaded.lines) deps.err(line);
+    return EXIT_USAGE;
+  }
+  const named = loaded.config.harness;
+  if (options.harness !== undefined && named !== 'auto' && named !== options.harness) {
+    deps.err(`${printable(loaded.source)}: the roles file names the harness ${named}, but --harness is ${options.harness}. Nothing was started.`);
+    return EXIT_USAGE;
+  }
+  if (options.roles === undefined && loaded.file !== null) {
+    const stop = await confirmFoundRoles(loaded.file, loaded.config, options.yes, deps);
+    if (stop !== undefined) return stop;
+  }
+  const source = {
+    file: loaded.file,
+    ...(loaded.sha256 === null ? {} : { sha256: loaded.sha256 }),
+    ...(options.workers === undefined ? {} : { workers: options.workers }),
+  };
+  return (deps.startTeam ?? launchTeam)(loaded.config, deps, source);
+}
+
 /**
  * Shows a roles file that `start` found in the current folder, with each
  * session's kickoff, and asks before it starts anything. A cloned folder

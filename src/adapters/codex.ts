@@ -23,9 +23,51 @@ export function supervisorScriptPath(): string {
   return fileURLToPath(new URL(`./codex-supervisor${ext}`, import.meta.url));
 }
 
-/** The arguments for one `codex exec` session. Codex documents no flag to name a session, so the kickoff names it. */
+/**
+ * The sandbox every `codex exec` session runs in. Read from the local
+ * `codex exec --help` of codex-cli 0.157.0: `-s, --sandbox <SANDBOX_MODE>`
+ * takes read-only, workspace-write, or danger-full-access, and
+ * `-c, --config <key=value>` overrides one configuration value, parsed as
+ * TOML. So a session can write only its workspace, and its commands get no
+ * network access. trellis-crew never passes danger-full-access or
+ * `--dangerously-bypass-approvals-and-sandbox`.
+ */
+export const CODEX_SANDBOX_ARGS: readonly string[] = ['--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=false'];
+
+/**
+ * Returns why a launch flag is refused on Codex CLI, or undefined when
+ * none is. A flag that sets the sandbox or a configuration value could
+ * undo CODEX_SANDBOX_ARGS, so each one is refused, in every spelling that
+ * the help lists: the long form, the long form with `=`, and the short
+ * form with its value joined on.
+ */
+export function refusedCodexFlag(flagArgs: readonly string[]): string | undefined {
+  const refused = flagArgs.find(
+    (arg) =>
+      /^--(sandbox|config)(=|$)/.test(arg) ||
+      /^-[sc]/.test(arg) ||
+      arg.includes('dangerously-bypass-approvals-and-sandbox') ||
+      arg.includes('danger-full-access'),
+  );
+  if (refused === undefined) return undefined;
+  return `the launch flag "${refused}" is refused on Codex CLI, because trellis-crew sets the sandbox itself: ${CODEX_SANDBOX_ARGS.join(' ')}`;
+}
+
+/**
+ * The arguments for one `codex exec` session. Codex documents no flag to
+ * name a session, so the kickoff names it. The help shows the prompt as
+ * the trailing `[PROMPT]` argument, so the kickoff follows `--`, and a
+ * kickoff that starts with `-` is never read as an option. Throws when a
+ * launch flag is refused.
+ */
 export function codexExecArgs(flagArgs: readonly string[], kickoff: string): string[] {
-  return ['exec', ...flagArgs, kickoff];
+  const refused = refusedCodexFlag(flagArgs);
+  if (refused !== undefined) throw new Error(refused);
+  return ['exec', ...flagArgs, ...CODEX_SANDBOX_ARGS, '--', kickoff];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -57,7 +99,8 @@ function copySkills(ctx: AdapterContext): PluginOutcome {
  * detach flag, no session-name flag, and no cross-session messaging. So
  * `start` hands every session to one detached supervisor, which starts
  * each `codex exec` process, and the team uses the file mailbox. No launch
- * flag is verified, so every set field warns.
+ * flag is verified, so every set field warns. Every session runs with
+ * CODEX_SANDBOX_ARGS, and a flag that could change the sandbox is refused.
  */
 export const codexAdapter: Adapter = {
   id: 'codex',
@@ -73,11 +116,16 @@ export const codexAdapter: Adapter = {
       });
       return { ok: true, entry: { name, pid, session_id: null } };
     } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      return { ok: false, message: errorMessage(error) };
     }
   },
 
   async launchAll(items, ctx, teamPath) {
+    // Every session's flags are checked before the job file is written, so a refused flag starts no session.
+    for (const item of items) {
+      const refused = refusedCodexFlag(item.flagArgs);
+      if (refused !== undefined) return { ok: false, message: `${item.name}: ${refused}` };
+    }
     const job: SupervisorJob = {
       binary: ctx.binaryPath,
       cwd: ctx.env.cwd,
@@ -95,7 +143,7 @@ export const codexAdapter: Adapter = {
       });
       return { ok: true, supervisorPid: pid };
     } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      return { ok: false, message: errorMessage(error) };
     }
   },
 

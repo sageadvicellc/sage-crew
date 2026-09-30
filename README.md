@@ -100,6 +100,41 @@ To check for a newer CLI and update the plugin, run
 `trellis-crew update`. Add `--check` to change nothing. The CLI prints
 your harness's own update command, and it never runs that command.
 
+### Set up and start in one step
+
+`trellis-crew up` runs the install and then `start`, in one command.
+It works on Codex CLI and Claude Code.
+
+```
+trellis-crew up --harness codex
+trellis-crew up --harness claude-code --accept-inbound
+```
+
+- `--harness <name>` is required. The names are `codex` and
+  `claude-code`. Any other name exits 2.
+- The install step runs as `install --harness <name> --non-interactive`.
+  So it asks no question.
+- `up` takes the flags that `start` takes: `--workers N`,
+  `--roles <file>`, and `--yes`.
+- `--roles` must name a local file. A URL, a `git@` address, a folder,
+  or a symbolic link exits 2. The CLI checks the file before the install
+  and again before `start`.
+- `--yes` confirms a roles file that `up` finds in the current folder.
+  With no `--yes`, `up` starts nothing, because it asks no question.
+- `--yes` never changes your settings file. On Claude Code, add
+  `--accept-inbound` to set the inbound setting, or `--skip-inbound` to
+  leave the file alone. With neither flag, the install step leaves the
+  file alone and exits 1. The inbound setting is described under "Set it
+  up once".
+
+`up` stops at the first step that fails. It prints that step's message,
+then a line that names the step, and it exits with that step's code.
+When the install step fails, nothing starts.
+
+A later design plans `trellis-crew up` with a `crew.yml` file, in
+`docs/crew-addendum.md`. That design must fit with `up --harness`, which
+exists now.
+
 ### What each harness does
 
 The launch fields `autocompact`, `model`, and `effort` are checked on
@@ -116,7 +151,11 @@ that you set and prints a warning that names the session and the field.
   You start each session in its own terminal.
 - Codex CLI sessions start under one supervisor process. `start` returns
   at once. The supervisor starts each `codex exec` process and records
-  its process ID. `stop` ends the supervisor and each session.
+  its process ID. `stop` ends the supervisor and each session. Each
+  session runs with `--sandbox workspace-write`, and network access is
+  off. The CLI never uses `danger-full-access` or
+  `--dangerously-bypass-approvals-and-sandbox`. It refuses a launch flag
+  that can change the sandbox.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.
