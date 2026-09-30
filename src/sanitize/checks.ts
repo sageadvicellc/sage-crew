@@ -128,7 +128,14 @@ const PATTERNS: readonly Pattern[] = [
     regex: /\b[\w-]+\.atlassian\.net\/(?:browse|jira)\/|\blinear\.app\/[\w-]+\/issue\//g,
   },
   // A Claude Code session link or id points at a private conversation.
-  { cls: 'session-link', detail: 'Claude session link', regex: /\bclaude\.ai\/code\/session/gi },
+  {
+    cls: 'session-link',
+    detail: 'Claude session link',
+    // The parts may be joined by `/`, by `%2F` in an encoded URL, or by
+    // `\/` in escaped JSON. No word boundary leads it, because an encoded
+    // URL puts `%2F` right before the host.
+    regex: /claude\.ai(?:\/|%2f|\\\/)code(?:\/|%2f|\\\/)session/gi,
+  },
   {
     cls: 'session-link',
     detail: 'Claude session id',

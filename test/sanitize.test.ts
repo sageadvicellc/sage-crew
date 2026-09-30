@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -10,7 +10,7 @@ import {
   scanText,
   type FindingClass,
 } from '../src/sanitize/checks.ts';
-import { CANNOT_READ, decodeText, parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
+import { CANNOT_READ, decodeText, oneLine, parseStagedDiff, runSanitize } from '../src/sanitize/run.ts';
 import { createRunner, type Runner, type RunResult } from '../src/runner.ts';
 import { makeFixtureHome } from './helpers/env.ts';
 import { makeFixtureRepo } from './helpers/git-repo.ts';
@@ -67,6 +67,8 @@ const seeded: Array<[string, string, FindingClass]> = [
   ['a bare Claude session id', `resume ${fake.sessionId} later`, 'session-link'],
   ['a session link in capitals', `see ${fake.sessionUrl.toUpperCase()}`, 'session-link'],
   ['a session id with a prefix', `id cse_${fake.sessionId}`, 'session-link'],
+  ['an encoded session link', 'https%3A%2F%2F' + ['claude.ai', 'code', 'session'].join('%2F'), 'session-link'],
+  ['a session link in escaped JSON', ['claude.ai', 'code', 'session'].join('\\/'), 'session-link'],
 ];
 
 const clean = [
@@ -386,8 +388,10 @@ describe('sanitize run', () => {
     expect(result.code).toBe(1);
     expect(result.err).not.toContain('\u001b');
     expect(result.err.split('\n').filter((line) => line !== '').every((line) => line.startsWith('sanitize: '))).toBe(true);
-    expect(result.err).toContain('deny-list: z\\x1b[2K\\n::error::forged:1');
-    expect(result.err).toContain('w\\x1b[2K\\n::error::wide (staged)');
+    // `::` is escaped too, so no line can act as a workflow command.
+    expect(result.err).not.toContain('::');
+    expect(result.err).toContain('deny-list: z\\x1b[2K\\n:\\x3aerror:\\x3aforged:1');
+    expect(result.err).toContain('w\\x1b[2K\\n:\\x3aerror:\\x3awide (staged)');
   });
 
   it('a staged binary file named like a stage number is read as that path', async () => {
@@ -774,17 +778,37 @@ describe('sanitize run', () => {
     expect(missing.code).toBe(1);
   });
 
-  it('CI runs the base sanitizer on the branch as data, and only there holds the secret', () => {
-    const workflow = parseYaml(readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8')) as {
-      jobs: Record<string, { steps: Array<Record<string, unknown>> }>;
+  it('CI runs the base sanitizer on the branch as data, and only sanitize.yml holds the secret', () => {
+    type Workflow = {
+      on: Record<string, unknown>;
+      permissions: Record<string, string>;
+      jobs: Record<string, { permissions?: Record<string, string>; steps: Array<Record<string, unknown>> }>;
     };
-    const gates = JSON.stringify(workflow.jobs['gates']);
-    expect(gates).not.toContain('secrets.');
-    expect(gates).not.toContain('sanitize');
-    const steps = workflow.jobs['sanitize']?.steps ?? [];
+    const read = (name: string): { text: string; parsed: Workflow } => {
+      const text = readFileSync(join(repoRoot, '.github', 'workflows', name), 'utf8');
+      return { text, parsed: parseYaml(text) as Workflow };
+    };
+    const ci = read('ci.yml');
+    expect(ci.text).not.toContain('secrets.');
+    expect(ci.text).not.toContain('sanitize/run.ts');
+
+    const { text, parsed } = read('sanitize.yml');
+    // pull_request_target always runs the base branch's copy of this file.
+    expect(Object.keys(parsed.on).sort()).toEqual(['pull_request_target', 'push']);
+    expect(parsed.on['push']).toEqual({ branches: ['main'] });
+    expect(parsed.permissions).toEqual({ contents: 'read' });
+    expect(Object.keys(parsed.jobs)).toEqual(['sanitize']);
+    const job = parsed.jobs['sanitize'];
+    expect(job?.permissions).toEqual({ contents: 'read' });
+    expect(text.match(/secrets\./g)).toHaveLength(1);
+
+    const steps = job?.steps ?? [];
     const checkouts = steps.filter((s) => String(s['uses'] ?? '').startsWith('actions/checkout@'));
-    expect(checkouts.map((s) => (s['with'] as Record<string, unknown>)['path'])).toEqual(['base', 'head']);
-    for (const s of checkouts) expect((s['with'] as Record<string, unknown>)['persist-credentials']).toBe(false);
+    const opts = checkouts.map((s) => s['with'] as Record<string, unknown>);
+    expect(opts.map((o) => o['path'])).toEqual(['base', 'head']);
+    expect(String(opts[0]?.['ref'])).toContain('github.event.pull_request.base.sha');
+    expect(String(opts[1]?.['ref'])).toContain('github.event.pull_request.head.sha');
+    for (const o of opts) expect(o['persist-credentials']).toBe(false);
     for (const s of steps) expect(String(s['run'] ?? ''), 'no npm in the sanitize job').not.toMatch(/\bnpm\b/);
     const run = steps.find((s) => String(s['run'] ?? '').includes('sanitize/run.ts'));
     expect(run?.['run']).toBe('node "$GITHUB_WORKSPACE/base/src/sanitize/run.ts"');
@@ -792,6 +816,64 @@ describe('sanitize run', () => {
     const env = run?.['env'] as Record<string, string>;
     expect(env['SANITIZE_REQUIRE_DENYLIST']).toBe('1');
     expect(env['SANITIZE_ALLOWLIST']).toMatch(/\/base\/\.sanitize-allow$/);
+    expect(env['SANITIZE_RANGE']).toContain("github.event_name == 'pull_request_target'");
+  });
+
+  it('a tracked link is scanned as its target text and never followed', async () => {
+    const repo = makeFixtureRepo();
+    // The outside file sits next to the fixture repository, and the link
+    // names it by a relative path, so the link text itself holds no leak.
+    const name = `outside-${Date.now()}.md`;
+    const outside = join(repo.root, '..', name);
+    writeFileSync(outside, `see ${fake.macHome}/notes\n`);
+    try {
+      repo.write('clean.md', 'nothing\n');
+      symlinkSync(`../${name}`, join(repo.root, 'link.md'));
+      repo.git('add', 'clean.md', 'link.md');
+      repo.commit('chore: start');
+      const followed = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      // The outside file holds a home path, but the link is not followed.
+      expect(followed.err).not.toMatch(/private-path: link\.md/);
+      expect(followed.code).toBe(0);
+
+      const named = makeFixtureRepo();
+      symlinkSync(`${fake.macHome}/notes`, join(named.root, 'home.md'));
+      named.git('add', 'home.md');
+      named.commit('chore: start');
+      // The target text itself is data, so a link that names a home path fails.
+      const target = await sanitize(named.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      expect(target.code).toBe(1);
+      expect(target.err).toMatch(/private-path: home\.md:1/);
+    } finally {
+      rmSync(outside);
+    }
+  });
+
+  it('a tracked file whose folder links outside the repository fails, and is never read', async () => {
+    const repo = makeFixtureRepo();
+    repo.write('dir/notes.md', 'nothing\n');
+    repo.commit('chore: start');
+    // Replace the tracked folder with a link to a folder outside the
+    // repository that holds a file of the same name with a leak in it.
+    const outsideDir = join(repo.root, '..', `outside-dir-${Date.now()}`);
+    mkdirSync(outsideDir);
+    writeFileSync(join(outsideDir, 'notes.md'), `see ${fake.macHome}/notes\n`);
+    try {
+      rmSync(join(repo.root, 'dir'), { recursive: true });
+      symlinkSync(outsideDir, join(repo.root, 'dir'));
+      const result = await sanitize(repo.root, { SANITIZE_DENYLIST: denyFile() }, 'HEAD');
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/sanitize: cannot read dir\/notes\.md/);
+      expect(result.err).not.toMatch(/private-path: dir\/notes\.md:1/);
+    } finally {
+      rmSync(outsideDir, { recursive: true });
+    }
+  });
+
+  it('a printed line never holds a workflow command marker', () => {
+    expect(oneLine('::error::name.md')).not.toContain('::');
+    expect(oneLine('a::b')).toBe('a:\\x3ab');
+    expect(oneLine('sanitize: clean.')).toBe('sanitize: clean.');
   });
 
   it('the sanitizer imports only node built-ins and its own files, so CI installs nothing to run it', () => {

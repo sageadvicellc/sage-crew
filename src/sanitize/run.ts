@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { envFromProcess } from '../env.ts';
@@ -196,12 +196,23 @@ function validUtf16(units: Buffer): boolean {
  * Returns undefined for a binary file or a submodule folder, which hold no
  * text to scan, and CANNOT_READ when the path is missing or unreadable.
  */
-function readTracked(abs: string): string | undefined | typeof CANNOT_READ {
+function readTracked(root: string, abs: string): string | undefined | typeof CANNOT_READ {
   try {
+    // The folder that holds the path must resolve inside the repository,
+    // so a linked folder cannot lead a read outside it. Such a path fails.
+    const dir = realpathSync(dirname(abs));
+    if (dir !== root && !dir.startsWith(root + sep)) return CANNOT_READ;
     const stat = lstatSync(abs);
+    // A link is scanned as its target text and is never followed.
     if (stat.isSymbolicLink()) return readlinkSync(abs);
     if (!stat.isFile()) return undefined;
-    return decodeText(readFileSync(abs));
+    // O_NOFOLLOW refuses a file that turned into a link after the check.
+    const fd = openSync(abs, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      return decodeText(readFileSync(fd));
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return CANNOT_READ;
   }
@@ -322,9 +333,13 @@ async function resolveRange(opts: SanitizeOptions, git: Git): Promise<string | u
   return undefined;
 }
 
-/** Escapes a line for output: every control character, and newline and tab too. */
-function oneLine(text: string): string {
-  return printable(text).replace(/\n/g, '\\n').replace(/\t/g, '\\t');
+/**
+ * Escapes a line for output: every control character, newline and tab, and
+ * every `::`. A runner reads `::` as the start of a workflow command, so a
+ * file name or range that holds it is printed as `:\x3a`.
+ */
+export function oneLine(text: string): string {
+  return printable(text).replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/::/g, ':\\x3a');
 }
 
 function print(findings: Finding[], err: (line: string) => void): void {
@@ -358,7 +373,7 @@ export async function runSanitize(options: SanitizeOptions): Promise<number> {
   const tracked = listed.stdout.split('\0').filter((p) => p !== '' && p !== deny.selfPath);
   for (const path of tracked) {
     findings.push(...scanPath(path, { ...(deny.list ? { deny: deny.list } : {}), allow }));
-    const text = readTracked(join(root, path));
+    const text = readTracked(root, join(root, path));
     if (text === CANNOT_READ) {
       // A file the scan cannot read is a failure, never a silent pass.
       failures.push(`cannot read ${path}`);

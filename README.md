@@ -256,4 +256,6 @@ range is `origin/main..HEAD` when `origin/main` exists.
 
 `.githooks/pre-push` runs the sanitizer on the commits you push. Turn it
 on once per clone with `git config core.hooksPath .githooks`. CI runs the
-same checks on every pull request and push.
+same checks on every pull request and every push to main, in
+`.github/workflows/sanitize.yml`. That workflow runs the base branch's
+sanitizer and reads the branch only as data.
