@@ -10,7 +10,6 @@ import { composeKickoff } from '../kickoff/compose.ts';
 import { ensureMailboxFolder, mailboxPath } from '../mailbox/folder.ts';
 import { loadTeam, type LoadOptions, type LoadResult } from '../roles/load.ts';
 import type { HarnessId, RolesConfig, Session, Transport } from '../roles/schema.ts';
-import { API_KEY_WARNING, shouldWarnAboutApiKey } from '../sign-in.ts';
 import { readInstallRecord } from '../store/install-yml.ts';
 import { readTeam, teamJsonPath, writeTeam, type TeamEntry, type TeamRecord, type TeamSource } from '../store/team-json.ts';
 import { startedOf } from '../runner.ts';
@@ -65,12 +64,6 @@ export async function runStart(options: StartOptions, deps: CliDeps): Promise<nu
   if (!loaded.ok) {
     for (const line of loaded.lines) deps.err(line);
     return EXIT_USAGE;
-  }
-  // `up` warns first, so only a direct start warns here. Claude Code runs on an API key.
-  if (options.harness === undefined) {
-    const installed = readInstallRecord(deps.env);
-    const harness = loaded.config.harness !== 'auto' ? loaded.config.harness : installed.ok ? installed.record?.harness : undefined;
-    if (harness === 'claude-code' && shouldWarnAboutApiKey(deps.env)) deps.err(API_KEY_WARNING);
   }
   const mismatch = options.harness === undefined ? undefined : harnessMismatch(loaded, options.harness);
   if (mismatch !== undefined) {

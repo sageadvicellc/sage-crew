@@ -64,9 +64,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 /** A value that is not a real key. The tests check that it is never echoed. */
 const FIXTURE_KEY = 'fixture-key-value-9f3c1a';
 const SENTINEL = 'sentinel-not-a-real-file';
-const WARNING =
-  'warning: ANTHROPIC_API_KEY is not set. Trellis runs your installed Claude Code under your own sign-in. Use an Anthropic API key. If you sign in another way, you can ignore this.';
-
 function rig(vars: Record<string, string | undefined> = {}) {
   const base = makeTestEnv({ cwd: makeFixtureRepo().root });
   const env = { ...base, vars: { ...base.vars, ...vars } };
@@ -251,19 +248,11 @@ describe('sign-in safety: static scan of shipped code', () => {
     expect(callSiteLiterals().filter(({ literal }) => /credential/i.test(literal))).toEqual([]);
   });
 
-  it('ANTHROPIC_API_KEY appears in one file only, and there it is read only as a set check', () => {
-    const named = hits(/ANTHROPIC_API_KEY/).map((h) => h.split(':')[0]);
-    expect(new Set(named)).toEqual(new Set(['src/sign-in.ts']));
-    const text = files.find((f) => f.name === 'src/sign-in.ts')?.text ?? '';
-    const code = text.split('\n').filter((line) => !/^\s*(\/\*|\*|\/\/)/.test(line));
-    // The only read of any variable is one comparison of its trimmed value with the empty string.
-    const reads = code.filter((line) => /vars\[/.test(line));
-    expect(reads).toHaveLength(1);
-    expect(reads[0]).toMatch(/vars\[name\]/);
-    expect(reads[0]).toMatch(/\.trim\(\) !== ''/);
-    // The value is never put in a template, an argument, or a file write.
-    expect(code.join('\n')).not.toMatch(/\$\{[^}]*vars/);
-    expect(code.join('\n')).not.toMatch(/writeFile|appendFile|out\(|err\(/);
+  it('no file in src names ANTHROPIC_API_KEY or any other sign-in variable', () => {
+    // Trellis neither requires, warns about, nor reads any key. The user signs in to the harness first.
+    expect(hits(/ANTHROPIC_/)).toEqual([]);
+    expect(hits(/CLAUDE_CODE_USE_/)).toEqual([]);
+    expect(files.some((f) => f.name === 'src/sign-in.ts')).toBe(false);
   });
 });
 
@@ -413,121 +402,40 @@ describe('sign-in safety: run time', () => {
   });
 });
 
-describe('up: the API key warning', () => {
+describe('up and start print no API key warning', () => {
   const UP = ['up', '--harness', 'claude-code', '--skip-inbound'];
+  const KEY_TEXT = /ANTHROPIC|API key|warning/i;
+  const cases: [string, Record<string, string | undefined>][] = [
+    ['unset', {}],
+    ['empty', { ANTHROPIC_API_KEY: '' }],
+    ['white space', { ANTHROPIC_API_KEY: '  ' }],
+    ['set', { ANTHROPIC_API_KEY: FIXTURE_KEY }],
+  ];
 
-  it('warns on stderr when ANTHROPIC_API_KEY is unset, and still succeeds', async () => {
-    const t = rig();
-    expect(await main(UP, t.deps)).toBe(0);
-    expect(t.errText()).toContain(WARNING);
-    expect(t.outText()).not.toContain('warning: ANTHROPIC_API_KEY');
-  });
-
-  it('warns when ANTHROPIC_API_KEY is empty or only white space', async () => {
-    for (const value of ['', '   ', '\t\n']) {
-      const t = rig({ ANTHROPIC_API_KEY: value });
+  it('up on claude-code prints nothing about a key, whether the key is unset, empty, or set', async () => {
+    for (const [, vars] of cases) {
+      const t = rig(vars);
       expect(await main(UP, t.deps)).toBe(0);
-      expect(t.errText()).toContain(WARNING);
+      expect(t.log.join('\n')).not.toMatch(KEY_TEXT);
+      expect(t.log.join('\n')).not.toContain(FIXTURE_KEY);
     }
   });
 
-  it('does not warn when it is set, and never echoes the value', async () => {
-    const t = rig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
-    expect(await main(UP, t.deps)).toBe(0);
-    expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
-    expect(t.log.join('\n')).not.toContain(FIXTURE_KEY);
-  });
-
-  it('does not warn when Claude Code runs on Bedrock or Vertex', async () => {
-    for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']) {
-      const t = rig({ [name]: '1' });
-      expect(await main(UP, t.deps)).toBe(0);
-      expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
+  it('start on claude-code prints nothing about a key, whether the key is unset, empty, or set', async () => {
+    for (const [, vars] of cases) {
+      const t = rig(vars);
+      writeInstallRecord(t.env, { harness: 'claude-code', transport: 'native', plugin_version: null });
+      expect(await main(['start', '--yes'], t.deps)).toBe(0);
+      expect(t.log.join('\n')).not.toMatch(KEY_TEXT);
+      expect(t.log.join('\n')).not.toContain(FIXTURE_KEY);
     }
-    const empty = rig({ CLAUDE_CODE_USE_BEDROCK: '' });
-    expect(await main(UP, empty.deps)).toBe(0);
-    expect(empty.errText()).toContain(WARNING);
   });
 
-  it('prints the warning before any step output', async () => {
-    const t = rig();
-    expect(await main(UP, t.deps)).toBe(0);
-    expect(t.log[0]).toBe(`err:${WARNING}`);
-    expect(t.log.findIndex((line) => line.startsWith('out:Step 1 of 2'))).toBeGreaterThan(0);
-  });
-
-  it('gives the same exit code with the key set and unset on the same failing input', async () => {
-    // No inbound flag: the install step exits 1.
+  it('up needs no key: the exit code is the same with the key set and unset on the same failing input', async () => {
     const unset = rig();
     const set = rig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
-    const codeUnset = await main(['up', '--harness', 'claude-code'], unset.deps);
-    const codeSet = await main(['up', '--harness', 'claude-code'], set.deps);
-    expect(codeUnset).toBe(1);
-    expect(codeSet).toBe(codeUnset);
-    expect(unset.errText()).toContain(WARNING);
-    expect(set.errText()).not.toContain('ANTHROPIC_API_KEY');
-  });
-
-  it('up prints the warning once, not again from the start step', async () => {
-    const t = rig();
-    expect(await main(UP, t.deps)).toBe(0);
-    expect(t.log.filter((line) => line === `err:${WARNING}`)).toHaveLength(1);
-  });
-
-  it('does not warn on codex, which has its own sign-in', async () => {
-    const t = rig();
-    expect(await main(['up', '--harness', 'codex'], t.deps)).toBe(0);
-    expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
-  });
-});
-
-describe('start: the API key warning', () => {
-  function startRig(vars: Record<string, string | undefined> = {}) {
-    const t = rig(vars);
-    writeInstallRecord(t.env, { harness: 'claude-code', transport: 'native', plugin_version: null });
-    return t;
-  }
-
-  it('warns first when ANTHROPIC_API_KEY is unset, blank, or white space, and still starts the team', async () => {
-    for (const value of [undefined, '', '  ']) {
-      const t = startRig(value === undefined ? {} : { ANTHROPIC_API_KEY: value });
-      expect(await main(['start', '--yes'], t.deps)).toBe(0);
-      expect(t.log[0]).toBe(`err:${WARNING}`);
-      expect(t.runner.calls.some((c) => c.args[0] === '--bg')).toBe(true);
-    }
-  });
-
-  it('does not warn when the key is set, and never echoes it', async () => {
-    const t = startRig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
-    expect(await main(['start', '--yes'], t.deps)).toBe(0);
-    expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
-    expect(t.log.join('\n')).not.toContain(FIXTURE_KEY);
-  });
-
-  it('does not warn on Bedrock or Vertex', async () => {
-    for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']) {
-      const t = startRig({ [name]: '1' });
-      expect(await main(['start', '--yes'], t.deps)).toBe(0);
-      expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
-    }
-  });
-
-  it('gives the same exit code with the key set and unset on the same failing input', async () => {
-    const unset = startRig();
-    const set = startRig({ ANTHROPIC_API_KEY: FIXTURE_KEY });
-    // A second start finds a team record and fails with exit 1.
-    expect(await main(['start', '--yes'], unset.deps)).toBe(0);
-    expect(await main(['start', '--yes'], set.deps)).toBe(0);
-    const codeUnset = await main(['start', '--yes'], unset.deps);
-    const codeSet = await main(['start', '--yes'], set.deps);
-    expect(codeUnset).toBe(1);
-    expect(codeSet).toBe(codeUnset);
-  });
-
-  it('does not warn when the harness is codex', async () => {
-    const t = rig();
-    writeInstallRecord(t.env, { harness: 'codex', transport: 'file-mailbox', plugin_version: null });
-    await main(['start', '--yes'], t.deps);
-    expect(t.errText()).not.toContain('ANTHROPIC_API_KEY');
+    expect(await main(['up', '--harness', 'claude-code'], unset.deps)).toBe(1);
+    expect(await main(['up', '--harness', 'claude-code'], set.deps)).toBe(1);
+    expect(unset.log.join('\n')).not.toMatch(/ANTHROPIC|API key/i);
   });
 });
