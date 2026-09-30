@@ -21,13 +21,45 @@ export interface InstallOptions {
   yes?: boolean;
   skipInbound?: boolean;
   transport?: TransportFlag;
+  /**
+   * The roles file named on the command line, which `up` passes on. It
+   * sets the mailbox folder, and it is not confirmed, as start does not
+   * confirm a --roles file. Unset: ./sagespec.yml, when it is here.
+   */
+  roles?: string;
+  /** Consent for a roles file found in this folder. Unset: `yes` covers it, as `install --yes` does. */
+  rolesYes?: boolean;
+  /** The lines that tell the operator how to run again. Unset: the ones that name install. */
+  hints?: InstallHints;
+  /**
+   * Keeps the transport that install.yml records when it names the same
+   * harness, and says so. `up` sets it. Unset: `--harness` picks the
+   * harness's default transport, as install always has.
+   */
+  keepStoredTransport?: boolean;
 }
+
+/** The lines that name the command and flag to run again with. */
+export interface InstallHints {
+  /** Printed when nothing consented to the inbound setting. */
+  inboundMissing: string;
+  /** Printed when no terminal can confirm a roles file found in this folder. */
+  rolesNoTerminal: string;
+  /** Printed when install.yml cannot be read. */
+  recordDamaged: string;
+}
+
+const INSTALL_HINTS: InstallHints = {
+  inboundMissing: 'Run install again with --yes to set it, or with --skip-inbound to leave it.',
+  rolesNoTerminal: 'No terminal can confirm this roles file. Read it, then run install again with --yes.',
+  recordDamaged: 'Run trellis-crew install --reconfigure to write it again.',
+};
 
 async function chooseHarness(options: InstallOptions, deps: CliDeps): Promise<{ ok: true; harness: HarnessInfo; stored?: Transport } | { ok: false; code: number }> {
   const stored = readInstallRecord(deps.env);
   if (!stored.ok && !options.reconfigure) {
     deps.err(stored.message);
-    deps.err('Run trellis-crew install --reconfigure to write it again.');
+    deps.err((options.hints ?? INSTALL_HINTS).recordDamaged);
     return { ok: false, code: EXIT_RUNTIME };
   }
   const record = stored.ok ? stored.record : undefined;
@@ -48,6 +80,10 @@ async function chooseHarness(options: InstallOptions, deps: CliDeps): Promise<{ 
   if (!result.ok) {
     for (const line of result.lines) deps.err(line);
     return { ok: false, code: result.code };
+  }
+  if (options.keepStoredTransport === true && record?.harness === result.harness.id) {
+    deps.out(`Keeping the ${record.transport} transport, stored in install.yml.`);
+    return { ok: true, harness: result.harness, stored: record.transport };
   }
   return { ok: true, harness: result.harness };
 }
@@ -75,7 +111,7 @@ async function inboundConsent(
   deps.out('trellis-crew stop does not undo it. To undo it, restore the backup or edit the file.');
   if (options.yes) return 'granted';
   if (options.nonInteractive || !deps.env.stdinIsTTY) {
-    deps.err(`The inbound setting was not changed, because nothing confirmed it. Run install again with --yes to set it, or with --skip-inbound to leave it.`);
+    deps.err(`The inbound setting was not changed, because nothing confirmed it. ${(options.hints ?? INSTALL_HINTS).inboundMissing}`);
     return 'missing';
   }
   const answer = (await (deps.ask ?? terminalAsk())(`Set ${key} to accept? [y/N] `)).trim().toLowerCase();
@@ -105,17 +141,17 @@ export async function runInstall(options: InstallOptions, deps: CliDeps): Promis
   // confirmed, as start does, before anything is written.
   let roles: Pick<RolesConfig, 'mailbox'> = {};
   if (transport === 'file-mailbox') {
-    const found = loadTeam({ env: deps.env });
+    const found = loadTeam({ env: deps.env, ...(options.roles === undefined ? {} : { roles: options.roles }) });
     if (!found.ok) {
       for (const line of found.lines) deps.err(line);
       return EXIT_USAGE;
     }
-    if (found.file !== null) {
+    if (found.file !== null && options.roles === undefined) {
       const asking = { ...deps, env: { ...deps.env, stdinIsTTY: deps.env.stdinIsTTY && !options.nonInteractive } };
-      const stop = await confirmFoundRoles(found.file, found.config, options.yes === true, asking, {
+      const stop = await confirmFoundRoles(found.file, found.config, (options.rolesYes ?? options.yes) === true, asking, {
         heading: 'Roles file found in this folder',
         question: 'Use this roles file? [y/N] ',
-        noTerminal: 'No terminal can confirm this roles file. Read it, then run install again with --yes.',
+        noTerminal: (options.hints ?? INSTALL_HINTS).rolesNoTerminal,
         declined: 'Nothing was installed.',
       });
       if (stop !== undefined) return stop;

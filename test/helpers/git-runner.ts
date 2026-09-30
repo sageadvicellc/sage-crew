@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { createRunner, type RunOptions, type RunResult } from '../../src/runner.ts';
 import { recordingRunner, type RecordedCall, type RecordingRunner, type Responder } from './recording-runner.ts';
 
@@ -20,7 +21,7 @@ export function gitRunner(responder?: Responder): GitRunner {
     ...recorder,
     gitCalls,
     async run(command: string, args: readonly string[], options: RunOptions = {}): Promise<RunResult> {
-      if (command !== 'git') return recorder.run(command, args, options);
+      if (basename(command) !== 'git') return recorder.run(command, args, options);
       gitCalls.push({ kind: 'run', command, args });
       return real.run('git', args, { ...options, env: { ...options.env, PATH: process.env.PATH } });
     },

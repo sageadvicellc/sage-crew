@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fixture stub, so findBinary finds git on the fixture PATH. The recording
+# runner answers git itself and never runs this file.
+exit 1

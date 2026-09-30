@@ -17,6 +17,8 @@ export interface AdapterContext {
   binaryPath: string;
   /** Prints one line for the operator. */
   out: (line: string) => void;
+  /** The absolute file mailbox folder, for the file-mailbox transport. */
+  mailbox?: string;
 }
 
 export type LaunchOutcome = { ok: true; entry: TeamEntry } | { ok: false; message: string };
@@ -52,6 +54,12 @@ export interface Adapter {
   checkPlugin?(ctx: Pick<AdapterContext, 'env' | 'runner'>): Promise<PluginCheck>;
   /** The user settings file whose inbound setting install sets to accept, after a dated backup. */
   inboundTarget?(env: Env): InboundTarget;
+  /**
+   * Why a file mailbox folder is refused on this harness, or undefined.
+   * Checked before the folder is created. Unset: any folder the roles file
+   * allows.
+   */
+  mailboxProblem?(mailbox: string, env: Env): string | undefined;
   /** Extra status lines from the harness's own session list. */
   statusLines?(ctx: AdapterContext): Promise<string[]>;
   /**
