@@ -38,8 +38,9 @@ npm link
 Trellis runs your installed Claude Code under your own sign-in. It does not offer, handle, or broker a claude.ai login. Use an Anthropic API key.
 
 If `ANTHROPIC_API_KEY` is not set, `trellis-crew up --harness claude-code`
-prints a warning. The warning never stops `up`, and it never prints the
-key. A test scans the source to check that no code runs
+prints a warning. A value of white space counts as not set. If
+`CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` is set, `up` skips
+the warning. The warning never stops `up`, and it never prints the key. A test scans the source to check that no code runs
 a Claude login command or reads Claude credentials.
 
 ### Set it up once
