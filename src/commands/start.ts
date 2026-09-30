@@ -27,6 +27,65 @@ export function loadForHarness(options: Omit<LoadOptions, 'harness'>, deps: CliD
   return loadTeam({ ...options, harness: first.config.harness });
 }
 
+export interface StartOptions {
+  workers?: number;
+  roles?: string;
+  yes: boolean;
+  /** The harness the team must run on, from `up --harness`. A roles file that names another one is refused. */
+  harness?: HarnessId;
+  /**
+   * The SHA-256 of the roles text that `up` read and checked, or null for
+   * the default team. The text that start loads must match it, so a file
+   * that changed in between is never launched.
+   */
+  expectSha256?: string | null;
+}
+
+/** The line that refuses a roles file naming another harness than --harness, or undefined when it does not. */
+export function harnessMismatch(loaded: Extract<LoadResult, { ok: true }>, harness: HarnessId): string | undefined {
+  const named = loaded.config.harness;
+  if (named === 'auto' || named === harness) return undefined;
+  return `${printable(loaded.source)}: the roles file names the harness ${named}, but --harness is ${harness}. Nothing was started.`;
+}
+
+/**
+ * The start path: loads the team, confirms a roles file found in this
+ * folder, and launches every session. `start` and `up` both run it.
+ */
+export async function runStart(options: StartOptions, deps: CliDeps): Promise<number> {
+  const loaded = loadForHarness(
+    {
+      env: deps.env,
+      ...(options.roles === undefined ? {} : { roles: options.roles }),
+      ...(options.workers === undefined ? {} : { workers: options.workers }),
+    },
+    deps,
+  );
+  if (!loaded.ok) {
+    for (const line of loaded.lines) deps.err(line);
+    return EXIT_USAGE;
+  }
+  const mismatch = options.harness === undefined ? undefined : harnessMismatch(loaded, options.harness);
+  if (mismatch !== undefined) {
+    deps.err(mismatch);
+    return EXIT_USAGE;
+  }
+  if (options.expectSha256 !== undefined && loaded.sha256 !== options.expectSha256) {
+    deps.err(`${printable(loaded.source)}: the roles file changed after up read it. Nothing was started.`);
+    return EXIT_USAGE;
+  }
+  if (options.roles === undefined && loaded.file !== null) {
+    const stop = await confirmFoundRoles(loaded.file, loaded.config, options.yes, deps);
+    if (stop !== undefined) return stop;
+  }
+  const source = {
+    file: loaded.file,
+    ...(loaded.sha256 === null ? {} : { sha256: loaded.sha256 }),
+    ...(options.workers === undefined ? {} : { workers: options.workers }),
+  };
+  return (deps.startTeam ?? launchTeam)(loaded.config, deps, source);
+}
+
 /**
  * Shows a roles file that `start` found in the current folder, with each
  * session's kickoff, and asks before it starts anything. A cloned folder
@@ -131,6 +190,11 @@ export function planLaunch(config: RolesConfig, deps: CliDeps): { ok: true; plan
   }
   const plan: LaunchPlan = { harness, adapter, binaryPath, transport };
   if (transport === 'file-mailbox') {
+    const problem = adapter.mailboxProblem?.(mailboxPath(config, deps.env), deps.env);
+    if (problem !== undefined) {
+      deps.err(problem);
+      return { ok: false, code: EXIT_USAGE };
+    }
     const folder = ensureMailboxFolder(mailboxPath(config, deps.env));
     if (!folder.ok) {
       deps.err(folder.message);
@@ -160,7 +224,13 @@ export function prepareSession(
 }
 
 function contextFor(plan: LaunchPlan, deps: CliDeps): AdapterContext {
-  return { env: deps.env, runner: deps.runner, binaryPath: plan.binaryPath, out: deps.out };
+  return {
+    env: deps.env,
+    runner: deps.runner,
+    binaryPath: plan.binaryPath,
+    out: deps.out,
+    ...(plan.mailbox === undefined ? {} : { mailbox: plan.mailbox }),
+  };
 }
 
 /** Starts one session and prints its warnings. */

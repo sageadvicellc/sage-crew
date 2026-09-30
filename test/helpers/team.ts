@@ -5,6 +5,7 @@ import type { CliDeps } from '../../src/cli.ts';
 import type { Env } from '../../src/env.ts';
 import { writeInstallRecord } from '../../src/store/install-yml.ts';
 import { makeTestEnv } from './env.ts';
+import { makeFixtureRepo } from './git-repo.ts';
 import { capture, type Capture } from './io.ts';
 import { recordingRunner, type RecordingRunner } from './recording-runner.ts';
 
@@ -21,13 +22,17 @@ export function claudeInstalled(extra: Partial<CliDeps> = {}): Harnessed {
   return installedOn('claude-code', 'native', extra);
 }
 
-/** A fixture home with a harness and transport chosen at install, and a recording runner. */
+/**
+ * A fixture home with a harness and transport chosen at install, and a
+ * recording runner. On Codex CLI the current folder is the top of a fresh
+ * temp git repository, because Codex sessions start only there.
+ */
 export function installedOn(
   harness: Adapter['id'],
   transport: 'native' | 'a2a' | 'file-mailbox',
   extra: Partial<CliDeps> = {},
 ): Harnessed {
-  const env = makeTestEnv();
+  const env = harness === 'codex' ? makeTestEnv({ cwd: makeFixtureRepo().root }) : makeTestEnv();
   writeInstallRecord(env, { harness, transport, plugin_version: '0.1.0' });
   const runner = recordingRunner();
   const out = capture();

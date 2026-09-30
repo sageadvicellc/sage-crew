@@ -54,6 +54,11 @@ export function loadTeam(options: LoadOptions): LoadResult {
     const reason = error instanceof Error && 'code' in error ? String(error.code) : 'unreadable';
     return failure(`${file}: cannot read the roles file (${reason})`);
   }
+  return loadTeamText(text, file, options);
+}
+
+/** Validates roles-file text that was already read from `file`, and applies --workers. Any failure is exit code 2. */
+export function loadTeamText(text: string, file: string, options: Omit<LoadOptions, 'roles'>): LoadResult {
   const result = validateRoles(text, options.harness ? { harness: options.harness } : {});
   if (!result.ok) {
     return failure(...formatRolesErrors(result.errors, text, file), 'Nothing was started.');

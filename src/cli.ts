@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { parseCommand, USAGE, type Command } from './args.ts';
 import { runInstall } from './commands/install.ts';
 import { runRespawn } from './commands/respawn.ts';
-import { confirmFoundRoles, launchTeam, loadForHarness } from './commands/start.ts';
+import { runStart } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runStop } from './commands/stop.ts';
+import { runUp } from './commands/up.ts';
 import { runUpdate } from './commands/update.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from './deps.ts';
 import { envFromProcess } from './env.ts';
@@ -42,30 +43,10 @@ async function dispatch(command: Command, deps: CliDeps): Promise<number> {
     case 'version':
       deps.out(cliVersion());
       return EXIT_OK;
-    case 'start': {
-      const loaded = loadForHarness(
-        {
-          env: deps.env,
-          ...(command.roles === undefined ? {} : { roles: command.roles }),
-          ...(command.workers === undefined ? {} : { workers: command.workers }),
-        },
-        deps,
-      );
-      if (!loaded.ok) {
-        for (const line of loaded.lines) deps.err(line);
-        return EXIT_USAGE;
-      }
-      if (command.roles === undefined && loaded.file !== null) {
-        const stop = await confirmFoundRoles(loaded.file, loaded.config, command.yes, deps);
-        if (stop !== undefined) return stop;
-      }
-      const source = {
-        file: loaded.file,
-        ...(loaded.sha256 === null ? {} : { sha256: loaded.sha256 }),
-        ...(command.workers === undefined ? {} : { workers: command.workers }),
-      };
-      return (deps.startTeam ?? launchTeam)(loaded.config, deps, source);
-    }
+    case 'start':
+      return runStart(command, deps);
+    case 'up':
+      return runUp(command, deps);
     case 'status':
       return runStatus(deps);
     case 'stop':

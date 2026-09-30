@@ -1,4 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { basename } from 'node:path';
 import type { ProcessStart, RunOptions, RunResult, Runner } from '../../src/runner.ts';
+
+/** True for a recorded call to git, which the working-folder check makes. */
+export function isGitCall(call: RecordedCall): boolean {
+  return basename(call.command) === 'git';
+}
 
 export interface RecordedCall {
   kind: 'run' | 'detached' | 'kill';
@@ -21,6 +28,34 @@ export interface RecordingRunner extends Runner {
 
 const ok: RunResult = { code: 0, stdout: '', stderr: '', timedOut: false };
 
+/** The git calls the working-folder check makes. The recording runner answers only these. */
+const ANSWERED_GIT = [
+  ['rev-parse', '--show-toplevel'],
+  ['config', '--list', '--show-origin', '--includes', '-z'],
+];
+
+/**
+ * Answers the working-folder check's git calls with the real git in the
+ * call's folder, so the check reads a real temp repository, with git's own
+ * exit code. Git is not a harness, so this runs no agent session. Every
+ * other git call is refused. Git runs with the environment the call was
+ * given, except PATH, which stays this process's PATH so the real git is
+ * found instead of the fixture stub.
+ */
+function realGit(args: readonly string[], options: RunOptions | undefined): RunResult {
+  if (!ANSWERED_GIT.some((known) => known.length === args.length && known.every((arg, i) => arg === args[i]))) {
+    return { code: 2, stdout: '', stderr: 'fixture: this git call is not answered\n', timedOut: false };
+  }
+  const env = options?.env === undefined ? process.env : { ...options.env, PATH: process.env.PATH };
+  try {
+    const stdout = execFileSync('git', [...args], { cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { code: 0, stdout, stderr: '', timedOut: false };
+  } catch (error) {
+    const failed = error as { status?: unknown; stderr?: unknown };
+    return { code: typeof failed.status === 'number' ? failed.status : 1, stdout: '', stderr: String(failed.stderr ?? ''), timedOut: false };
+  }
+}
+
 export function recordingRunner(responder: Responder = () => ok): RecordingRunner {
   const calls: RecordedCall[] = [];
   const living = new Set<number>();
@@ -32,8 +67,9 @@ export function recordingRunner(responder: Responder = () => ok): RecordingRunne
     living,
     starts,
     unknown,
-    async run(command: string, args: readonly string[], _options?: RunOptions): Promise<RunResult> {
+    async run(command: string, args: readonly string[], options?: RunOptions): Promise<RunResult> {
       calls.push({ kind: 'run', command, args });
+      if (basename(command) === 'git') return realGit(args, options);
       return responder(command, args);
     },
     async spawnDetached(command: string, args: readonly string[]): Promise<{ pid: number }> {

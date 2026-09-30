@@ -100,6 +100,51 @@ To check for a newer CLI and update the plugin, run
 `trellis-crew update`. Add `--check` to change nothing. The CLI prints
 your harness's own update command, and it never runs that command.
 
+### Set up and start in one step
+
+`trellis-crew up` runs the install and then `start`, in one command.
+It works on Codex CLI and Claude Code.
+
+```
+trellis-crew up --harness codex
+trellis-crew up --harness claude-code --accept-inbound
+```
+
+- `--harness <name>` is required. The names are `codex` and
+  `claude-code`. Any other name exits 2.
+- On Codex CLI, run `up` at the top of a git worktree. See "The Codex
+  CLI sandbox" below.
+- The install step runs as `install --harness <name> --non-interactive`.
+  So it asks no question.
+- `up` takes the flags that `start` takes: `--workers N`,
+  `--roles <file>`, and `--yes`.
+- `--roles` must name a local regular file. A URL, a `git@` address, or
+  a folder exits 2. The last part of the path must not be a symbolic
+  link. A parent folder can still be a link. `up` reads the file once,
+  and it checks the team before the install. So a bad roles file, or
+  one that names another harness, installs nothing. Before `start`, `up`
+  checks the file again. If the file changed after `up` read it, `up`
+  starts nothing. `start --roles` does not make these checks.
+- `--yes` confirms a roles file that `up` finds in the current folder.
+  With no `--yes`, `up` starts nothing, because it asks no question.
+- `--yes` never changes your settings file. On Claude Code, add
+  `--accept-inbound` to set the inbound setting, or `--skip-inbound` to
+  leave the file alone. With neither flag, the install step leaves the
+  file alone and exits 1. The inbound setting is described under "Set it
+  up once".
+
+When `install.yml` already records the same harness, `up` keeps the
+transport it records and prints it. `install --harness` does not.
+
+`up` stops at the first step that fails. It prints that step's message,
+then a line that names the step, and it exits with that step's code.
+When the install step fails, nothing starts. When `start` fails, the
+line says that the install step already ran.
+
+A later design plans `trellis-crew up` with a `crew.yml` file, in
+`docs/crew-addendum.md`. That design must fit with `up --harness`, which
+exists now.
+
 ### What each harness does
 
 The launch fields `autocompact`, `model`, and `effort` are checked on
@@ -116,7 +161,8 @@ that you set and prints a warning that names the session and the field.
   You start each session in its own terminal.
 - Codex CLI sessions start under one supervisor process. `start` returns
   at once. The supervisor starts each `codex exec` process and records
-  its process ID. `stop` ends the supervisor and each session.
+  its process ID. `stop` ends the supervisor and each session. See
+  "The Codex CLI sandbox" below.
 - Amp starts each session as a titled thread on the vendor's servers.
   No command to stop a thread is documented. So `stop` leaves each
   thread running and prints its ID when the CLI has it.
@@ -127,6 +173,91 @@ By default, on every harness except Claude Code and Qwen Code, sessions
 talk through a file mailbox. The default folder is
 `~/.trellis-crew/mailbox`. Set `mailbox` in the roles file to use
 another folder. The value must not hold a `..` part.
+
+### The Codex CLI sandbox
+
+The CLI sets three things on the `codex exec` command line for each
+session.
+
+- The sandbox mode is `--sandbox workspace-write`. The local
+  `codex exec --help` of codex-cli 0.157.0 describes `--sandbox` as
+  "Select the sandbox policy to use when executing model-generated
+  shell commands".
+- Network access is off, through
+  `-c sandbox_workspace_write.network_access=false`.
+- The writable roots are the mailbox folder only, through
+  `-c sandbox_workspace_write.writable_roots=[...]`. This list replaces
+  the list in your own `~/.codex/config.toml`. With no mailbox, the list
+  is empty.
+
+The help lists `-c` as an override that is "parsed as TOML". It does not
+list the keys under `sandbox_workspace_write`. The CLI uses the key names
+that the codex-cli 0.157.0 binary holds, and a later build must check
+them again.
+
+The CLI never uses `danger-full-access` or
+`--dangerously-bypass-approvals-and-sandbox`. Codex CLI has no verified
+launch flag, so the CLI refuses every launch flag and every bare word
+before the prompt. The supervisor checks each session's arguments again
+before it starts that session. If the arguments are wrong, it refuses
+that session and writes the reason to `codex-supervisor.log` in the
+state folder.
+
+The sandbox lets each session write its working folder. So the CLI
+starts Codex CLI sessions only at the top of a git worktree. The CLI
+runs `git rev-parse --show-toplevel` in the current folder. The answer
+must be that same folder, after both paths resolve through any links.
+The CLI also refuses your home folder and `/`. It refuses a folder that
+holds another git repository one to three levels below it. It follows
+no symbolic link during that search. It refuses a folder whose
+`core.hooksPath` points inside it, because a session can write a git
+hook there. For the same reason, it refuses a command in the git
+settings that names a path inside the folder. Examples are
+`core.fsmonitor`, `core.sshCommand`, a filter, and an alias that starts
+with `!`. Git runs these commands in the worktree top. So in them, a
+shell or a runtime, such as `sh` or `python3`, must run an absolute
+path outside the folder. This test is not a shell parser. It does
+not see a command found on `PATH`, or a path built at run time.
+Through `include.path` or `includeIf`, git can read a
+settings file from inside the folder. The CLI refuses the folder then.
+The folder's own `.git` is allowed, and so is a settings file inside
+that `.git`. Each of these git
+calls runs with every `GIT_` variable removed, so it sees what plain git
+sees. The folder is checked
+three times:
+
+- before `up` installs anything
+- before the CLI writes the supervisor job
+- in the supervisor, before it starts any session
+
+On Codex CLI, the mailbox folder must be inside the state folder,
+`~/.trellis-crew`. The CLI resolves the folder through any links first.
+Then it refuses each of these folders:
+
+- `/`
+- your home folder
+- the state folder itself
+- a folder that holds the state folder
+- a folder that holds the working folder
+- a folder outside the state folder
+
+`up` checks this before the install. `start` checks it before it
+creates the folder. On the other harnesses, the mailbox rules stay as
+they were.
+
+Each Codex CLI session gets only these environment variables:
+
+- `PATH`, `HOME`, `USER`, `LOGNAME`, and `SHELL`
+- `TMPDIR`, `TMP`, and `TEMP`
+- `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, and `TZ`
+- `SSL_CERT_FILE` and `SSL_CERT_DIR`
+- `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY`
+- `OPENAI_API_KEY` and `CODEX_HOME`
+
+No other variable passes, and no other `CODEX_` variable passes.
+
+This is not a full boundary. Your own `~/.codex/config.toml` can still
+change other keys.
 
 ### Exit codes
 
