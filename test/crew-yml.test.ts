@@ -746,6 +746,74 @@ describe('loadCrewYml: one open, no swap between check and read', () => {
   });
 });
 
+describe('crew.yml: the teardown block', () => {
+  function withTeardown(...lines: string[]): string {
+    return crewYml({ extra: ['teardown:', ...lines.map((line) => `  ${line}`)] });
+  }
+
+  it('is optional, and a file without it has no teardown field', () => {
+    const result = parseCrewYml(crewYml(), CREW_FILE);
+    expect(result.ok && 'teardown' in result.config).toBe(false);
+  });
+
+  it('parses handoffs and timeout', () => {
+    const result = parseCrewYml(withTeardown('handoffs: .crew/handoffs', 'timeout: 60'), CREW_FILE);
+    expect(result.ok && result.config.teardown).toEqual({ handoffs: '.crew/handoffs', timeout: 60 });
+  });
+
+  it('defaults timeout to 300 seconds', () => {
+    const result = parseCrewYml(withTeardown('handoffs: .crew/handoffs'), CREW_FILE);
+    expect(result.ok && result.config.teardown).toEqual({ handoffs: '.crew/handoffs', timeout: 300 });
+  });
+
+  it.each([10, 3600])('timeout %i passes', (timeout) => {
+    expectValid(withTeardown('handoffs: handoffs', `timeout: ${timeout}`));
+  });
+
+  it.each(['9', '3601', '0', '-5', '1.5', '"300"', 'soon', 'null'])('timeout %s fails', (timeout) => {
+    const text = withTeardown('handoffs: handoffs', `timeout: ${timeout}`);
+    expectError(text, 'teardown.timeout', /whole number of seconds from 10 to 3600/, lineContaining(text, 'timeout:'));
+  });
+
+  it('handoffs is required inside the block, at the line of the block', () => {
+    const text = withTeardown('timeout: 60');
+    expectError(text, 'teardown.handoffs', /required/, lineContaining(text, 'timeout:'));
+  });
+
+  it('fails when teardown is not a map', () => {
+    const text = crewYml({ extra: ['teardown: .crew/handoffs'] });
+    expectError(text, 'teardown', /map/, lineContaining(text, 'teardown:'));
+  });
+
+  it('fails an unknown field inside the block', () => {
+    const text = withTeardown('handoffs: handoffs', 'force: true');
+    expectError(text, 'teardown.force', /unknown field/, lineContaining(text, 'force:'));
+  });
+
+  it.each([
+    ['an empty value', '""', /non-empty/],
+    ['a number', '5', /non-empty/],
+    ['an absolute path', '/var/handoffs', /relative/],
+    ['a .. part', '../handoffs', /\.\./],
+    ['a .. part inside', 'a/../../b', /\.\./],
+    ['a leading hyphen', '-handoffs', /must not start with/],
+    ['a control character', quoted('hand\u001boffs'), /control character/],
+    ['a newline', quoted('hand\noffs'), /control character/],
+  ])('handoffs fails on %s', (_label, value, reason) => {
+    const text = withTeardown(`handoffs: ${value}`);
+    expectError(text, 'teardown.handoffs', reason, lineContaining(text, 'handoffs:'));
+  });
+
+  it.each(['handoffs', '.crew/handoffs', 'a/b/c', 'hand..offs'])('handoffs accepts %s', (value) => {
+    expectValid(withTeardown(`handoffs: ${value}`));
+  });
+
+  it('a bad teardown block fails the whole file', () => {
+    const result = parseCrewYml(withTeardown('handoffs: /abs'), CREW_FILE);
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe('crew.yml: later slices', () => {
   // Two sessions with one name fail. That check needs the session list, which slice 4 builds.
   it.skip('two sessions with one name fail', () => {

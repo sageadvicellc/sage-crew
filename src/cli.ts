@@ -7,6 +7,7 @@ import { runRespawn } from './commands/respawn.ts';
 import { confirmFoundRoles, launchTeam, loadForHarness } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runStop } from './commands/stop.ts';
+import { runTeardown } from './commands/teardown.ts';
 import { runUpdate } from './commands/update.ts';
 import { EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, type CliDeps } from './deps.ts';
 import { envFromProcess } from './env.ts';
@@ -70,6 +71,8 @@ async function dispatch(command: Command, deps: CliDeps): Promise<number> {
       return runStatus(deps);
     case 'stop':
       return runStop({ forceStop: command.forceStop }, deps);
+    case 'teardown':
+      return runTeardown(command, deps);
     case 'respawn':
       return runRespawn(command, deps);
     case 'install':

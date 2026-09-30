@@ -15,6 +15,7 @@
     "./skills/department-reporting-chain/",
     "./skills/department-handoff-contract/",
     "./skills/department-audit-log/",
-    "./skills/department-researcher/"
+    "./skills/department-researcher/",
+    "./skills/crew-teardown/"
   ]
 }

@@ -85,6 +85,24 @@ export interface CrewRole {
   lanes: number;
 }
 
+/** The bounds and default of `teardown.timeout`, in whole seconds. */
+export const TEARDOWN_TIMEOUT_MIN = 10;
+export const TEARDOWN_TIMEOUT_MAX = 3600;
+export const DEFAULT_TEARDOWN_TIMEOUT = 300;
+
+/** The `teardown` block: where handoff files live, and how long teardown waits for them. */
+export interface CrewTeardown {
+  /** The handoff folder, relative to the folder that holds `crew.yml`. */
+  handoffs: string;
+  /** The longest wait for every session to confirm, in whole seconds. */
+  timeout: number;
+}
+
+/** True when a value is a whole number of seconds that `teardown.timeout` accepts. */
+export function isTeardownTimeout(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= TEARDOWN_TIMEOUT_MIN && value <= TEARDOWN_TIMEOUT_MAX;
+}
+
 export interface CrewConfig {
   version: typeof CREW_SCHEMA_VERSION;
   harness: BuiltHarness;
@@ -92,6 +110,7 @@ export interface CrewConfig {
   require: string[];
   front: string;
   roles: CrewRole[];
+  teardown?: CrewTeardown;
 }
 
 export interface CrewError {
